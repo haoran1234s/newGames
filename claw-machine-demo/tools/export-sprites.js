@@ -4,7 +4,8 @@
  *
  * 用法：在 claw-machine-demo 目录起静态服务（python -m http.server 8321），然后
  *       node tools/export-sprites.js
- * 输出：../cocos-port/art/<分类>/<名称>.png 与 ../cocos-port/art/manifest.json
+ * 输出：../cocos-port/assets/resources/art/{atlas|screen}/<分类>/<名称>.png 与 manifest.json
+ *       atlas/ 下有 Cocos 自动图集配置（art.pac），构建时打成一张图集以便合批
  *
  * 约定：
  *  - 导出倍率 K=3（对应 3 倍屏），manifest 中 w/h 为像素，left/top 为逻辑坐标
@@ -17,9 +18,11 @@ const path = require('path');
 const { openPage } = require('../test/cdp');
 
 const URL = process.env.SHOT_URL ?? 'http://127.0.0.1:8321/';
-const OUT = path.resolve(__dirname, '../../cocos-port/art');
+const OUT = path.resolve(__dirname, '../../cocos-port/assets/resources/art');
 const K = 3;
 const REF_R = 20;
+/** 全屏尺寸的大图：单独成图，不进自动图集（图集上限 2048） */
+const SCREEN_SPRITES = ['bg/paper', 'pond/frame'];
 
 /** 页面内注入：导出器 + 素材清单（全部调用游戏现有绘制函数） */
 const PAGE_SCRIPT = String.raw`(() => {
@@ -126,6 +129,10 @@ const PAGE_SCRIPT = String.raw`(() => {
     ctx.fillStyle = 'rgba(255,231,168,0.55)'; ctx.fill();
   }, { refR: R, note: '半径 (1.7±0.15)×1.15r 呼吸' });
   // 5) 特效
+  add('fx/shadow', () => {
+    ctx.beginPath(); ctx.ellipse(0, R * 0.95, R * 0.85, R * 0.22, 0, 0, 7);
+    ctx.fillStyle = 'rgba(46,127,115,0.18)'; ctx.fill();
+  }, { refR: R, note: '池塘物品的水中投影，原点 = 物品中心' });
   add('fx/sparkle-coral', () => sparkle(0, 0, 8, PAL.coral), { refSize: 8 });
   add('fx/sparkle-gold', () => sparkle(0, 0, 8, '#F6C453'), { refSize: 8 });
   add('fx/heart', () => {
@@ -174,7 +181,8 @@ const PAGE_SCRIPT = String.raw`(() => {
         const s = __specs[${i}];
         return { name: s.name, meta: s.meta, ...__shoot(s.draw, s.mode) };
       })()`);
-      const file = `${r.name}.png`;
+      const big = SCREEN_SPRITES.includes(r.name);
+      const file = `${big ? 'screen' : 'atlas'}/${r.name}.png`;
       fs.mkdirSync(path.join(OUT, path.dirname(file)), { recursive: true });
       fs.writeFileSync(path.join(OUT, file), Buffer.from(r.data, 'base64'));
       const { data, name, meta, touchesEdge, ...geo } = r;

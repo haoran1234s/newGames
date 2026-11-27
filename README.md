@@ -6,7 +6,7 @@
 
 | 目录 | 玩法 | 状态 |
 |---|---|---|
-| `cocos-port/` | Cocos Creator 移植（进行中），素材与说明见 `cocos-port/README.md` | 素材已导出 |
+| `cocos-port/` | **Cocos Creator 3.8.8 版**，画面与手感和原型一致，说明见 `cocos-port/README.md` | Web 版已上线 |
 | `claw-machine-demo/` | **团子捞捞乐 v3**：黄金矿工钩子 × 槽位三消 × 闯关制，奶油手账风视觉 | 可玩原型（逻辑冒烟测试 + 截图回归） |
 
 v1（纯娃娃机收集版）存档于 `claw-machine-demo/index.v1.html`。
@@ -16,6 +16,10 @@ v1（纯娃娃机收集版）存档于 `claw-machine-demo/index.v1.html`。
 GitHub Pages 部署地址（手机浏览器直接打开）：
 
 **https://portfolio.horizondream.me/newGames/claw-machine-demo/**
+
+Cocos 版（同样的玩法，引擎重做）：
+
+**https://portfolio.horizondream.me/newGames/cocos/**
 
 操作：钩子自动摆动，看准时机点击屏幕放钩；捞起的团子进入底部 7 格槽位，凑齐 3 只同款自动消除；倒计时内达成关卡目标过关，槽满即败。
 

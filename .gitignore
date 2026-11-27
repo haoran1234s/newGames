@@ -9,6 +9,3 @@ claw-machine-demo/test/shots/
 Thumbs.db
 .DS_Store
 
-# 素材导出的检查图
-cocos-port/art/_contact.png
-cocos-port/art/_recompose.png

@@ -1,47 +1,62 @@
-# cocos-port · 团子捞捞乐 Cocos Creator 移植
+# cocos-port · 团子捞捞乐 Cocos Creator 版
 
-目标：用 Cocos Creator 3.8.9 重做，**画面和手感与 `claw-machine-demo/index.html` 保持一致**，同时可以构建微信/抖音小游戏和 Web 移动端（继续部署到 GitHub Pages）。
+用 Cocos Creator 3.8.8 重做的版本，**画面、手感、数值与 `claw-machine-demo/index.html` 保持一致**。
+Web 版在线试玩：**https://portfolio.horizondream.me/newGames/cocos/**
 
-## 进度
+## 目录
 
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| 0b 美术导出 | 用现版绘制函数导出 93 张 3 倍图 + `art/manifest.json` | 完成 |
-| 0a 逻辑核心 | 与渲染无关的 TypeScript 玩法核心 `core/`，测试迁移 | 待做 |
-| 0c 音效导出 | 合成音效离线渲染为 WAV | 待做 |
-| 1 Cocos 工程 | 场景、渲染组件、动画、HUD、界面 | 需安装 Cocos Creator 3.8.9 |
-| 2 发布 | 构建 web-mobile 部署到 `/newGames/cocos/`，截图对比验收 | 待做 |
+| 路径 | 说明 |
+|---|---|
+| `assets/main.scene` | 手写的空场景；相机、画布、所有节点由 `scripts/boot.ts` 在运行时创建，不依赖编辑器拖拽 |
+| `assets/scripts/core/game-core.ts` | 玩法核心（与渲染无关，不依赖 `cc`），从原型逐行移植，Node 可直接跑测试 |
+| `assets/scripts/view/ctx2d.ts` | Canvas 2D 兼容层：在 Graphics / Sprite / Label 上实现原型用到的绘制 API，保证 1:1 |
+| `assets/scripts/view/renderer.ts` | 表现层：逐函数移植原型绘制代码，团子/物品/钩子改用导出的精灵 |
+| `assets/scripts/view/game-view.ts` | 主循环（顿帧）+ 点击分发 |
+| `assets/scripts/view/audio.ts` | 音效表 + WebAudio 合成（与原型同一套音符） |
+| `assets/resources/art/` | 由原型绘制函数导出的素材：`atlas/`（自动图集，构建后合成 1 张）+ `screen/`（背景、池框两张大图） |
+| `test/core.test.ts` | 玩法核心单元测试（11 项） |
+| `tools/` | 构建、部署、截图对比、点击测试脚本 |
 
-## art/ 素材
+## 常用命令
 
-由 `claw-machine-demo/tools/export-sprites.js` 生成，**不要手改 PNG**，改画面请改 `index.html` 的绘制函数后重新导出：
+```bash
+node --test "test/*.test.ts"          # 玩法核心单元测试（Node 24 直接运行 TS）
+node tools/build.js                   # 构建调试包 → build/web-mobile/
+node tools/build.js --release         # 构建发布包（压缩）
+node tools/deploy.js                  # 发布包复制到仓库根目录 cocos/，提交推送后 GitHub Pages 生效
+
+# 截图对比与点击测试（先起服务：python -m http.server 8323 --directory build/web-mobile）
+node tools/shots.js                   # 7 个场景截图 → tools/shots/，并打印每个场景的 draw call
+node tools/tap-check.js               # 模拟手指点击：菜单 → 选关 → 放钩 → 入槽
+```
+
+编辑器默认路径 `D:\Cocos\Creator\3.8.8\CocosCreator.exe`，可用环境变量 `COCOS_CREATOR` 覆盖。
+构建脚本会自动清除 `ELECTRON_RUN_AS_NODE`（在 IDE 终端里运行时会继承这个变量，导致编辑器报 `bad option: --project`）。
+
+## 修改画面
+
+素材 PNG 不要手改：改 `claw-machine-demo/index.html` 里的绘制函数，然后重新导出：
 
 ```bash
 cd claw-machine-demo
-python -m http.server 8321          # 另开一个终端
-node tools/export-sprites.js        # 输出到 ../cocos-port/art/
+python -m http.server 8321            # 另开终端
+node tools/export-sprites.js          # 输出到 ../cocos-port/assets/resources/art/
 ```
 
-| 目录 | 内容 |
-|---|---|
-| `dolls/` | 池塘团子 7 种 × 4 表情（normal / blink / happy / shock），基准半径 20 |
-| `dolls-tray/` | 槽位团子 7 种 × 5 表情，描边按显示半径 15 加粗，显示时仍是 2px |
-| `ui/` | 菜单、选关、失败面板里的大团子（按原尺寸导出） |
-| `items/` | 石头 3 种形状 + 飘起的 z、河豚、闹钟 |
-| `fx/` | 闹钟光晕、珊瑚/金色闪光、爱心 |
-| `claw/` | 滑块、左右钩臂、钩头 3 种表情、滑轨 |
-| `pond/` | 静态池框（含渐变水体和叶子）、单段波纹 |
-| `bg/` | 纸张背景（点阵 + 固定种子颗粒） |
+`manifest.json` 字段：`w`/`h` 像素尺寸（3 倍图）；`anchorX`/`anchorY` Cocos 锚点；`left`/`top` 大图在 375×667 中的左上角；`refR` 基准半径（节点缩放 = 实际半径 / refR）。
 
-### manifest.json 字段
+## 与原型的已知差异
 
-- `w` / `h`：PNG 像素尺寸（3 倍图），Cocos 中逻辑尺寸 = 像素 / 3
-- `anchorX` / `anchorY`：Cocos 锚点（y 轴向上），即原绘制原点在图中的位置，直接填到 UITransform 的 anchorPoint
-- `left` / `top`：`screen` 类素材（背景、池框、滑轨）在 375×667 游戏坐标中的左上角
-- `refR`：绘制时的基准半径，节点缩放 = 实际半径 / refR
+- 池塘团子按半径 20 导出后缩放显示，描边在 1.6–2.5px 间变化（原型固定 2px），肉眼基本看不出
+- 水面波纹的裁剪用矩形遮罩（原型是圆角矩形），波纹不经过圆角区域，看不出区别
+- 字体粗细只有常规/粗体两档（与浏览器在 Windows 上的表现一致）
 
-### 与现版的已知差异
+## 性能
 
-- 池塘团子按半径 20 导出后缩放到 16–25，描边会随之变为 1.6–2.5px（现版固定 2px），肉眼基本看不出
-- 稀有闪光、闹钟光晕、石头的 z、钩臂开合、河豚呼吸这些动画部件单独导出，由 Cocos 做动画
-- 卡片、按钮、槽位格子、进度条、星星这类纯色矢量 UI 不导出，Cocos 中用 Graphics 组件绘制，文字用 Label 加描边
+- 发布包 2.76 MB（引擎 1.64 MB，已裁掉 Spine、龙骨、物理、瓦片地图、视频等 9 个用不到的模块）
+- 最复杂的第 8 关画面 33 次 draw call（未用图集时 122 次）
+
+## 后续：上架小游戏
+
+- 构建平台改为 `wechatgame` / `bytedance-mini-game` 即可产出小游戏包
+- 待接入：激励视频（复活、滑落挽回）、`wx.vibrateShort` 震动、分享、抖音侧边栏复访；小游戏平台没有 WebAudio 时需把 `audio.ts` 的音效表离线渲染为 WAV

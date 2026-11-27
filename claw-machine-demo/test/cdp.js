@@ -21,6 +21,9 @@ function connect(wsUrl) {
     if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
     if (msg.method === 'Runtime.exceptionThrown')
       console.error('页面异常:', msg.params.exceptionDetails.exception?.description);
+    // 设置环境变量 CDP_CONSOLE=1 时转发页面 console 输出
+    if (process.env.CDP_CONSOLE && msg.method === 'Runtime.consoleAPICalled')
+      console.log(`[页面 ${msg.params.type}]`, msg.params.args.map(a => a.value ?? a.description ?? '').join(' '));
   };
   const ready = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   const send = (method, params = {}) => new Promise(res => {
