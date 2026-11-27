@@ -22,7 +22,10 @@ const canvasStub = {
   addEventListener() {},
   getBoundingClientRect: () => ({ left: 0, top: 0, width: 375, height: 667 }),
 };
-globalThis.document = { getElementById: () => canvasStub };
+globalThis.document = {
+  getElementById: () => canvasStub,
+  createElement: () => ({ width: 0, height: 0, getContext: () => ctxStub }),  // 离屏背景画布
+};
 globalThis.window = globalThis;
 globalThis.innerWidth = 375;
 globalThis.innerHeight = 667;

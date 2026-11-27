@@ -2,6 +2,8 @@
 claw-machine-demo/qrcode.png
 claw-machine-demo/_check.js
 claw-machine-demo/_extract.py
+claw-machine-demo/_render.js
+claw-machine-demo/test/shots/
 
 # 系统文件
 Thumbs.db

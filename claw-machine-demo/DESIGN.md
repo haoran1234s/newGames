@@ -53,3 +53,52 @@
 
 - 过关结算展示星级+分数 → "第 X 关仅 X% 玩家通过" 攀比式分享（正式版接平台排行）
 - 卡关挑衅分享："我卡在第 X 关了，你来试试"
+
+---
+
+# 视觉与手感契约（v3 · 方案 A 奶油手账风）
+
+## 1. 审美定位与灵感溯源
+- **场景与受众**：18-35 岁女性，碎片时间竖屏单手玩；截图要能直接发小红书
+- **选定方向**：奶油手账风（暖白纸 + 细棕描边 + 粉彩团子）
+- **参考**：
+  - [Sumikko Gurashi 设计语言](https://designbycurio.com/learn/sumikko-gurashi-san-x-2012)：暖白底、细棕描边、粉彩填充，强调色只给可操作元素
+  - [Suika Game 设计分析](https://www.kokutech.com/blog/gamedev/design-patterns/unique-mechanics/suika-game)：一屏信息、表情随局势变化、落点虚线辅助瞄准、零阻力重开
+  - [Royal Match 拆解](https://www.deconstructoroffun.com/blog/2021/3/21/royal-match-the-new-king-from-turkey)：元素形状和颜色差异大，动画短，不让玩家等
+  - [Juice It or Lose It](https://gdad.wiki/wiki/sources/source-juice-it-or-lose-it) / [Art of Screenshake](https://gamedesign.gg/watch/art-of-screenshake/)：挤压拉伸、命中闪白、顿帧
+
+## 2. 色彩系统（对比度已脚本核算）
+| Token | 色值 | 用途 | 对比度 |
+|---|---|---|---|
+| `cream` | `#FFF6E9` | 画布底色 | — |
+| `paper` | `#FFFDF7` | 卡片/便签/槽位 | — |
+| `ink` | `#5A3D31` | 主文字 | 9.14 : 1（于 cream） |
+| `ink2` | `#8A6A5A` | 次文字 | 4.57 : 1（于 cream） |
+| `line` | `#6B4A3A` | 全局 2px 描边 | — |
+| `mint` | `#BFE6DF` | 池水、进度条 | ink 于其上 7.27 : 1 |
+| `honey` | `#F3D9A8` | 滑轨、底部货架 | — |
+| `butter` | `#FFE7A8` | 高亮、提示光 | ink 于其上 8.04 : 1 |
+| `coral` | `#FF7A8A` | **唯一行动色**（按钮/关卡徽章/钩子滑块） | 按钮文字用 `#4A2E24`：4.92 : 1 |
+| `danger` | `#C8394F` | 倒计时 ≤10s、槽位危险 | 4.97 : 1（于 paper） |
+
+规则：白字压珊瑚只有 2.50 : 1，**禁止使用**；按钮统一"珊瑚底 + 可可棕字 + 棕描边 + 实色错位投影"的贴纸样式。不用渐变文字，不用 emoji（各机型渲染不一致），图标全部 Canvas 自绘。
+
+## 3. 造型语言
+- 所有角色、物品、按钮、卡片统一 2px `line` 描边，像手账贴纸
+- 团子表情：平常（豆豆眼）/ 被钩中（开心 ^ ^）/ 槽位危险（担心 + 汗滴）/ 滑落（惊吓 o 嘴）
+- 障碍物也走可爱路线，但语义要清楚：石头是犯困的灰团子（重、懒），河豚是黄色带刺的生气脸（危险），时钟星画成小闹钟（加时间）
+- 字体：系统圆体栈 `PingFang SC / HarmonyOS Sans SC / MiSans / Microsoft YaHei`，标题 800、正文 600，数字用 tabular-nums 思路固定宽度
+
+## 4. 手感（Juice）清单
+| 时刻 | 反馈 |
+|---|---|
+| 瞄准 | 虚线落点辅助线（Suika 同款） |
+| 下钩 | 钩尖拖尾、入水涟漪 + 水声 |
+| 钩中 | 顿帧 60ms + 目标闪白 + 挤压回弹 + 短震 15ms |
+| 入槽 | 飞行途中缩小到槽位尺寸，落入后槽位与团子回弹 |
+| 凑三 | 三只团子向中心吸拢 → 爱心纸屑 + 冲击圈 + 顿帧 70ms + 震动 30ms；音阶随连击升高 |
+| 危险 | 槽位 ≥5/7 时货架描边呼吸变红，团子露出担心表情；已有 2 只同款的格子发黄光提示 |
+| 传说滑落 | 滑落前慢动作 + 钩子颤抖 + 汗滴 |
+| 爆炸 | 冲击圈 + 顿帧 100ms + 强震 |
+| 结算 | 面板弹出（ease-out-back），星星依次弹出、音高递增，分数滚动 |
+| 无障碍 | `prefers-reduced-motion` 下屏幕震动降到 30%，关闭待机弹跳 |
