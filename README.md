@@ -6,6 +6,7 @@
 
 | 目录 | 玩法 | 状态 |
 |---|---|---|
+| `cocos-port/` | Cocos Creator 移植（进行中），素材与说明见 `cocos-port/README.md` | 素材已导出 |
 | `claw-machine-demo/` | **团子捞捞乐 v3**：黄金矿工钩子 × 槽位三消 × 闯关制，奶油手账风视觉 | 可玩原型（逻辑冒烟测试 + 截图回归） |
 
 v1（纯娃娃机收集版）存档于 `claw-machine-demo/index.v1.html`。
@@ -36,6 +37,7 @@ cd claw-machine-demo
 node test/smoke.js    # 逻辑冒烟测试（Node 桩掉浏览器环境跑真实游戏逻辑）
 node test/probe.js    # 命中率/分布探针
 node test/shots.js    # 截图回归（需先 python -m http.server 8321，无头 Edge 输出 test/shots/*.png）
+node tools/export-sprites.js   # 导出 Cocos 用的 PNG 素材到 ../cocos-port/art/（同样需要先起服务）
 ```
 
 ## 技术路线

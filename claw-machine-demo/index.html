@@ -506,13 +506,15 @@ function update(dt) {
         claw.closeT += dt;
         claw.openAngle = Math.max(0, 1 - claw.closeT / CONFIG.closeAnimTime);
         if (claw.closeT >= CONFIG.closeAnimTime) {
-          // 传说款滑落判定
+          // 滑落判定：只有滑落高度落在上升路径内（低于待机位置）才生效。
+          // 高于待机位置的滑落点永远到不了，旧逻辑会把标记残留到后续钩子上，导致莫名颤抖
           const it = claw.grabbed;
+          claw.slipAtY = null;
           if (it && it.type.slippery) {
             const slipChance = CONFIG.slipBase * it.type.slippery * (1 - claw.accuracy)
                              + 0.05 * it.type.weight;
-            claw.slipAtY = Math.random() < slipChance
-              ? claw.y - rand(60, 200) : null;
+            const at = Math.random() < slipChance ? claw.y - rand(60, 200) : null;
+            claw.slipAtY = at !== null && at > CONFIG.clawHomeY ? at : null;
           }
           claw.state = 'RISE';
           SFX.grab();
@@ -541,6 +543,7 @@ function update(dt) {
         }
         if (claw.y <= CONFIG.clawHomeY) {
           claw.y = CONFIG.clawHomeY;
+          claw.slipAtY = null; claw.tremble = false;   // 每钩结束清理滑落状态
           if (claw.grabbed) {
             const it = claw.grabbed;
             claw.grabbed = null;
@@ -873,15 +876,32 @@ function render() {
 
 /* --------------------------------- 池塘 ---------------------------------- */
 function drawPond() {
+  drawPondFrame();
+  drawPondWater();
+}
+/** 静态池框：蜂蜜色木框 + 渐变水体 + 角落叶子（可整张导出为图片） */
+function drawPondFrame() {
   const P = CONFIG.pond, w = P.x1 - P.x0, h = P.y1 - P.y0;
-  // 蜂蜜色木框
   card(P.x0 - 9, P.y0 - 16, w + 18, h + 30, 22, PAL.honey, 5);
-  // 水体
   roundRect(P.x0, P.y0 - 6, w, h + 12, 15);
   const wg = ctx.createLinearGradient(0, P.y0, 0, P.y1);
   wg.addColorStop(0, '#CDEDE7'); wg.addColorStop(1, PAL.mintDeep);
   fillStroke(wg);
-  // 水面内容（裁剪在水体内）
+  // 角落装饰：小叶子（Sumikko 式「角落」趣味）
+  drawLeaf(P.x0 + 4, P.y0 - 12, -0.6);
+  drawLeaf(P.x0 + 20, P.y0 - 16, 0.2);
+  drawLeaf(P.x1 - 6, P.y1 + 10, 2.6);
+}
+/** 单段波纹路径（「~」形，宽 40） */
+function wavePath(x0, baseY) {
+  ctx.beginPath();
+  ctx.moveTo(x0, baseY);
+  ctx.quadraticCurveTo(x0 + 10, baseY - 4, x0 + 20, baseY);
+  ctx.quadraticCurveTo(x0 + 30, baseY + 4, x0 + 40, baseY);
+}
+/** 动态水面：波纹 / 气泡 / 涟漪（裁剪在水体内） */
+function drawPondWater() {
+  const P = CONFIG.pond, w = P.x1 - P.x0, h = P.y1 - P.y0;
   ctx.save();
   roundRect(P.x0, P.y0 - 6, w, h + 12, 15); ctx.clip();
   // 波纹线
@@ -890,10 +910,7 @@ function drawPond() {
     const baseY = P.y0 + h * frac;
     const off = (game.pondT * (14 + li * 6)) % 90;
     Array.from({ length: 6 }, (_, k) => P.x0 - 90 + k * 90 + off + li * 30).forEach(x0 => {
-      ctx.beginPath();
-      ctx.moveTo(x0, baseY);
-      ctx.quadraticCurveTo(x0 + 10, baseY - 4, x0 + 20, baseY);
-      ctx.quadraticCurveTo(x0 + 30, baseY + 4, x0 + 40, baseY);
+      wavePath(x0, baseY);
       ctx.stroke();
     });
   });
@@ -910,10 +927,6 @@ function drawPond() {
     ctx.globalAlpha = 1;
   });
   ctx.restore();
-  // 角落装饰：小叶子（Sumikko 式「角落」趣味）
-  drawLeaf(P.x0 + 4, P.y0 - 12, -0.6);
-  drawLeaf(P.x0 + 20, P.y0 - 16, 0.2);
-  drawLeaf(P.x1 - 6, P.y1 + 10, 2.6);
 }
 function drawLeaf(x, y, rot) {
   ctx.save();
@@ -944,46 +957,56 @@ function drawTrail() {
 }
 function drawClaw() {
   const x = claw.x + (claw.tremble ? rand(-1.6, 1.6) : 0), y = claw.y;
-  // 滑块（行动色：玩家唯一操控的东西）
-  roundRect(x - 18, CONFIG.railY - 12, 36, 19, 8);
-  fillStroke(PAL.coral);
+  drawCarriage(x);
   // 缆绳
   ctx.beginPath(); ctx.moveTo(x, CONFIG.railY + 7); ctx.lineTo(x, y);
   ctx.lineWidth = 2; ctx.strokeStyle = PAL.line; ctx.stroke();
   ctx.save();
   ctx.translate(x, y + 8);
-  // 两臂：粗棕线 + 细纸色线 = 描边线条
   const spread = 0.25 + claw.openAngle * 0.75;
-  [-1, 1].forEach(s => {
-    ctx.save();
-    ctx.rotate(s * spread);
-    ctx.beginPath(); ctx.moveTo(0, 2); ctx.quadraticCurveTo(s * 11, 14, s * 6, 27);
-    ctx.lineCap = 'round';
-    ctx.lineWidth = 8; ctx.strokeStyle = PAL.line; ctx.stroke();
-    ctx.lineWidth = 4.2; ctx.strokeStyle = PAL.paper; ctx.stroke();
-    ctx.restore();
-  });
-  // 钩头小圆脸
+  [-1, 1].forEach(s => drawClawArm(s, spread));
+  const stun = claw.state === 'STUN';
+  drawClawHead(stun ? 'stun' : claw.tremble ? 'sweat' : 'normal');
+  if (stun) drawStunStars();
+  ctx.restore();
+}
+/** 滑块（行动色：玩家唯一操控的东西） */
+function drawCarriage(x) {
+  roundRect(x - 18, CONFIG.railY - 12, 36, 19, 8);
+  fillStroke(PAL.coral);
+}
+/** 单只钩臂（以钩头中心为原点）：粗棕线 + 细纸色线 = 描边线条；s=-1 左 / 1 右 */
+function drawClawArm(s, spread) {
+  ctx.save();
+  ctx.rotate(s * spread);
+  ctx.beginPath(); ctx.moveTo(0, 2); ctx.quadraticCurveTo(s * 11, 14, s * 6, 27);
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 8; ctx.strokeStyle = PAL.line; ctx.stroke();
+  ctx.lineWidth = 4.2; ctx.strokeStyle = PAL.paper; ctx.stroke();
+  ctx.restore();
+}
+/** 钩头小圆脸：normal 豆豆眼 / sweat 冒汗 / stun 叉叉眼 */
+function drawClawHead(face) {
   ctx.beginPath(); ctx.arc(0, 0, 11, 0, 7);
   fillStroke(PAL.paper);
   ctx.fillStyle = PAL.ink; ctx.strokeStyle = PAL.ink; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
-  if (claw.state === 'STUN') {
-    // 眩晕：× × 眼
+  if (face === 'stun') {
     [-4, 4].forEach(ex => {
       ctx.beginPath();
       ctx.moveTo(ex - 2, -3); ctx.lineTo(ex + 2, 1); ctx.moveTo(ex + 2, -3); ctx.lineTo(ex - 2, 1);
       ctx.stroke();
     });
-    // 头顶转圈的小星星
-    [0, 1, 2].forEach(k => {
-      const a = game.pondT * 6 + k * 2.1;
-      sparkle(Math.cos(a) * 15, -15 + Math.sin(a) * 4, 3.5, '#F6C453');
-    });
-  } else {
-    [-4, 4].forEach(ex => { ctx.beginPath(); ctx.arc(ex, -1, 1.7, 0, 7); ctx.fill(); });
-    if (claw.tremble) drawSweat(10, -8, 4);
+    return;
   }
-  ctx.restore();
+  [-4, 4].forEach(ex => { ctx.beginPath(); ctx.arc(ex, -1, 1.7, 0, 7); ctx.fill(); });
+  if (face === 'sweat') drawSweat(10, -8, 4);
+}
+/** 眩晕时头顶转圈的小星星 */
+function drawStunStars() {
+  [0, 1, 2].forEach(k => {
+    const a = game.pondT * 6 + k * 2.1;
+    sparkle(Math.cos(a) * 15, -15 + Math.sin(a) * 4, 3.5, '#F6C453');
+  });
 }
 /** 汗滴 */
 function drawSweat(x, y, s) {
@@ -1219,12 +1242,14 @@ function drawPuffer(it) {
 }
 
 /** 时钟星：小闹钟（+5 秒语义一眼可读） */
-function drawClockItem(it) {
+function drawClockItem(it, { glow = true } = {}) {
   const r = it.r * 1.15;
   const wob = Math.sin(game.pondT * 9) * 0.08;
-  // 光晕
-  ctx.beginPath(); ctx.arc(0, 0, r * (1.7 + 0.15 * Math.sin(game.pondT * 3)), 0, 7);
-  ctx.fillStyle = 'rgba(255,231,168,0.55)'; ctx.fill();
+  // 光晕（导出素材时关闭，由引擎单独做呼吸动画）
+  if (glow) {
+    ctx.beginPath(); ctx.arc(0, 0, r * (1.7 + 0.15 * Math.sin(game.pondT * 3)), 0, 7);
+    ctx.fillStyle = 'rgba(255,231,168,0.55)'; ctx.fill();
+  }
   ctx.rotate(wob);
   // 双铃
   [-1, 1].forEach(s => {

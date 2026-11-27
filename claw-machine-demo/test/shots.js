@@ -1,19 +1,15 @@
 /**
- * 视觉截图工具：无头 Edge + CDP（Node 内置 WebSocket，零依赖）
+ * 视觉截图工具：无头 Edge + CDP（零依赖，连接逻辑见 test/cdp.js）
  * 用法：先在 claw-machine-demo 目录起静态服务（python -m http.server 8321），再 node test/shots.js
  * 输出：test/shots/*.png（iPhone 12 尺寸 390×844 @2x）
  */
 'use strict';
-const { spawn } = require('child_process');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
+const { openPage, sleep } = require('./cdp');
 
-const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const URL = process.env.SHOT_URL ?? 'http://127.0.0.1:8321/';
-const PORT = 9333;
 const OUT = path.join(__dirname, 'shots');
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /** 场景脚本：每项在页面内执行 setup，等待 wait 毫秒后截图 */
 const SCENES = [
@@ -45,63 +41,23 @@ const SCENES = [
       endFail('full');` },
 ];
 
-/** 极简 CDP 客户端 */
-function cdp(wsUrl) {
-  const ws = new WebSocket(wsUrl);
-  let id = 0;
-  const pending = new Map();
-  ws.onmessage = ev => {
-    const msg = JSON.parse(ev.data);
-    if (msg.id && pending.has(msg.id)) { pending.get(msg.id)(msg); pending.delete(msg.id); }
-    if (msg.method === 'Runtime.exceptionThrown') console.error('页面异常:', msg.params.exceptionDetails.exception?.description);
-  };
-  const ready = new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-  const send = (method, params = {}) => new Promise(res => {
-    const mid = ++id;
-    pending.set(mid, res);
-    ws.send(JSON.stringify({ id: mid, method, params }));
-  });
-  return { ready, send, close: () => ws.close() };
-}
-
 (async () => {
   fs.mkdirSync(OUT, { recursive: true });
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'shots-'));
-  const edge = spawn(EDGE, [
-    '--headless=new', `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`,
-    '--no-first-run', '--disable-gpu', '--autoplay-policy=no-user-gesture-required', 'about:blank',
-  ], { stdio: 'ignore' });
+  const page = await openPage(URL);
   try {
-    // 等待调试端口就绪
-    let target = null;
-    for (let i = 0; i < 40 && !target; i++) {
-      await sleep(250);
-      try {
-        const list = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
-        target = list.find(t => t.type === 'page');
-      } catch { /* 端口尚未就绪 */ }
-    }
-    if (!target) throw new Error('Edge 调试端口未就绪');
-    const c = cdp(target.webSocketDebuggerUrl);
-    await c.ready;
-    await c.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
-    await c.send('Runtime.enable');
-    await c.send('Page.enable');
-    await c.send('Page.navigate', { url: URL });
-    await sleep(1200);
     for (const sc of SCENES) {
-      const r = await c.send('Runtime.evaluate', { expression: `(() => { ${sc.setup} return 'ok'; })()`, returnByValue: true });
-      if (r.result?.exceptionDetails) {
-        console.error(`✗ ${sc.name} setup 报错:`, r.result.exceptionDetails.exception?.description);
+      try {
+        await page.evaluate(`(() => { ${sc.setup} })()`);
+      } catch (e) {
+        console.error(`✗ ${sc.name} setup 报错:`, e.message);
         continue;
       }
       await sleep(sc.wait);
-      const shot = await c.send('Page.captureScreenshot', { format: 'png' });
+      const shot = await page.send('Page.captureScreenshot', { format: 'png' });
       fs.writeFileSync(path.join(OUT, `${sc.name}.png`), Buffer.from(shot.result.data, 'base64'));
       console.log(`✓ ${sc.name}.png`);
     }
-    c.close();
   } finally {
-    edge.kill();
+    page.close();
   }
 })().catch(e => { console.error(e); process.exit(1); });

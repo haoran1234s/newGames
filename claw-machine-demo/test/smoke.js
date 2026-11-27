@@ -83,7 +83,7 @@ const driver = `
   assert(game.timeLeft > 70, '倒计时初始化 ' + game.timeLeft.toFixed(1));
 
   // 真实游玩循环：放钩直到过关或超时失败
-  let hits = 0, deliveries = 0, arrivals = 0, drops = 0;
+  let hits = 0, deliveries = 0, arrivals = 0, drops = 0, staleSlip = 0;
   const _oh = onHookHit; onHookHit = it => { hits++; _oh(it); };
   const _di = deliverItem; deliverItem = it => { deliveries++; _di(it); };
   const _ta = trayArrive; trayArrive = it => { arrivals++; _ta(it); };
@@ -91,6 +91,7 @@ const driver = `
   while (game.scene === 'play' && guard++ < 80) {
     let g2 = 0;
     while (game.scene === 'play' && claw.state !== 'SWING' && g2++ < 800) pump(0.05);
+    if (claw.state === 'SWING' && claw.slipAtY !== null) staleSlip++;   // 回到原位仍残留滑落标记 = bug
     if (game.scene !== 'play') break;
     pump(rand(0.15, 1.4));               // 模拟真人在摆动中择机点击
     if (game.scene !== 'play') break;
@@ -115,6 +116,30 @@ const driver = `
     assert(game.scene === 'play', '复活后回到游戏');
     assert(game.tray.every(s => s === null), '复活清空槽位');
     pump(2);                             // 让游戏继续跑一会
+  }
+
+  // --- 滑落标记残留（确定性复现）---
+  // 构造：团子贴近水面 → 闭合时钩子很高；随机数固定为 0 → 必判滑落且滑落高度 = 闭合高度 - 60，
+  // 该高度高于待机位置，上升途中永远到不了，旧代码会把标记残留到下一钩
+  {
+    startLevel(0);
+    game.tutorT = 0;
+    game.items = [new PondItem('cat', 187, 200, 18)];
+    game.items[0].driftAmp = 0;
+    const realRandom = Math.random;
+    Math.random = () => 0;
+    claw.swingT = 0; claw.x = 187; claw.state = 'DROP';
+    let g = 0;
+    while (claw.state !== 'SWING' && g++ < 400) pump(0.02);
+    Math.random = realRandom;
+    assert(claw.state === 'SWING', '构造场景：钩子已回到原位');
+    assert(claw.slipAtY === null, '回到原位后滑落标记已清除，实际 ' + claw.slipAtY);
+    // 下一钩空钩上升，末段不应出现颤抖减速
+    game.items = [];
+    claw.state = 'DROP';
+    let trembled = false; g = 0;
+    while (claw.state !== 'SWING' && g++ < 400) { pump(0.02); trembled = trembled || claw.tremble; }
+    assert(!trembled, '后续空钩上升不出现莫名颤抖');
   }
 
   // --- 直接测试三消结算 ---
@@ -184,6 +209,7 @@ const driver = `
   while (game.scene === 'play' && guard++ < 100) {
     let g2 = 0;
     while (game.scene === 'play' && claw.state !== 'SWING' && g2++ < 800) pump(0.05);
+    if (claw.state === 'SWING' && claw.slipAtY !== null) staleSlip++;   // 回到原位仍残留滑落标记 = bug
     if (game.scene !== 'play') break;
     pump(rand(0.15, 1.4));
     if (game.scene !== 'play') break;
@@ -192,6 +218,7 @@ const driver = `
   }
   pump(0.5);
   assert(true, '第 8 关压测无崩溃，结束于 ' + game.scene);
+  assert(staleSlip === 0, '钩子回到原位时不残留滑落标记（残留会导致后续每次上升末段莫名减速颤抖），残留次数 ' + staleSlip);
 
   console.log(fails === 0 ? '\\n✅ 全部通过' : '\\n❌ 失败 ' + fails + ' 项');
   if (fails > 0) throw new Error('smoke test failed');
