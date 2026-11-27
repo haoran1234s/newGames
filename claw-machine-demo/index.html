@@ -3,15 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>心动娃娃机 · 玩法原型</title>
+<title>团子捞捞乐 · 玩法原型 v2</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { width: 100%; height: 100%; background: #1a1225; overflow: hidden;
+  html, body { width: 100%; height: 100%; background: #14102a; overflow: hidden;
     display: flex; align-items: center; justify-content: center;
     font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
-  /* 游戏画布保持竖屏比例居中 */
   #game { touch-action: none; user-select: none; -webkit-user-select: none;
-    box-shadow: 0 0 60px rgba(255,150,200,.25); border-radius: 8px; }
+    box-shadow: 0 0 60px rgba(150,180,255,.25); border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -19,52 +18,73 @@
 <script>
 'use strict';
 /* ============================================================================
- * 心动娃娃机 —— 核心玩法原型（黄金矿工魔改）
- * 目的：验证「摆动→下落→夹取→滑落/出货」的核心手感，零美术零依赖
- * 所有可调皮的手感数值集中在 CONFIG 区，改数值即可调手感
+ * 团子捞捞乐 v2 —— 黄金矿工钩子 × 槽位三消 × 闯关制
+ * 核心：摆动钩子时机点击 → 钩中团子拉起 → 7格槽位凑三消除 → 倒计时内达标
+ * 手感数值集中在 CONFIG，关卡数值集中在 LEVELS
  * ==========================================================================*/
 
 /* ------------------------------- 手感调参区 ------------------------------- */
 const CONFIG = {
-  W: 375, H: 667,            // 逻辑分辨率（竖屏手机比例）
-  clawSwingAmplitude: 118,   // 爪子左右摆动幅度（px）
-  clawSwingSpeed: 1.6,       // 摆动角速度（越大摆动越快，时机越难）
-  clawDropSpeed: 430,        // 爪子下落速度 px/s（越快越爽快，越慢越紧张）
-  clawRiseSpeed: 300,        // 爪子上升速度（带娃娃时慢=紧张感）
-  clawGripPower: 1.0,        // 爪子力度全局倍率（商业点位：强力爪道具）
-  closeAnimTime: 0.32,       // 爪臂闭合动画时长（s）
-  gripThreshold: 0.35,       // 抓取判定阈值：低于它=夹不起来
-  weightPenalty: 0.30,       // 娃娃重量对抓取的惩罚系数
-  slipperyPenalty: 0.22,     // 娃娃圆滑度对抓取的惩罚系数
-  slipBase: 0.85,            // 上升途中滑落概率基数（滑落=最强紧张点/广告点位）
-  railY: 118,                // 滑轨高度
-  groundY: 548,              // 娃娃堆地面高度
-  exitX: 52,                 // 出货口中心 x
-  clawHomeY: 150,            // 爪子待机高度（缆绳收起）
+  W: 375, H: 667,
+  railY: 110,                // 钩子滑轨高度
+  clawHomeY: 142,            // 钩子待机高度
+  clawSwingAmplitude: 140,   // 摆动幅度 px（覆盖池塘全部横向生成范围）
+  clawDropSpeed: 460,        // 下落速度 px/s
+  clawRiseBase: 340,         // 上升基准速度（实际速度 = 该值 / 物品重量）
+  closeAnimTime: 0.22,       // 闭合动画秒数
+  hookLen: 26,               // 钩尖到爪头的距离（碰撞点偏移）
+  pond: { x0: 22, x1: 353, y0: 248, y1: 542 },  // 池塘区域
+  trayY: 618,                // 槽位中心高度
+  traySlots: 7,              // 槽位数（羊了个羊式压力）
+  slotW: 46,                 // 单槽宽度
+  slipBase: 0.85,            // 传说团子滑落概率基数
+  deliverTime: 0.45,         // 物品飞入槽位动画秒数
+  stunTime: 1.2,             // 河豚爆炸眩晕秒数
 };
 
-/* ------------------------------- 娃娃图鉴数据 ----------------------------- */
-/* rarity: common 60% / rare 30% / legend 10%（通过重量+圆滑度自然控制出货率） */
-const DOLL_TYPES = [
-  { name: '奶猫团子', body: '#FFF3E4', ear: 'cat',    rarity: 'common', weight: 0.9,  slippery: 0.25 },
-  { name: '灰灰兔',   body: '#CFCBE0', ear: 'rabbit', rarity: 'common', weight: 0.9,  slippery: 0.30 },
-  { name: '云朵熊',   body: '#DCEEFF', ear: 'bear',   rarity: 'common', weight: 1.0,  slippery: 0.28 },
-  { name: '草莓兔',   body: '#FFB7C9', ear: 'rabbit', rarity: 'rare',   weight: 1.15, slippery: 0.45 },
-  { name: '柴犬元宝', body: '#F7B24A', ear: 'shiba',  rarity: 'rare',   weight: 1.25, slippery: 0.42 },
-  { name: '彩虹独角兽', body: '#E8D5FF', ear: 'unicorn', rarity: 'legend', weight: 1.55, slippery: 0.68 },
+/* ------------------------------- 物品类型注册 ----------------------------- */
+/* kind: doll 进槽位可消除 / rock 障碍重物 / puffer 炸弹 / star +时间 / wild 万能 */
+const ITEMS = {
+  cat:      { kind: 'doll', name: '奶猫团子',   rarity: 'common', score: 100, weight: 1.0,  slippery: 0.08, body: '#FFF3E4', ear: 'cat' },
+  rabbit:   { kind: 'doll', name: '灰灰兔团',   rarity: 'common', score: 100, weight: 1.0,  slippery: 0.08, body: '#CFCBE0', ear: 'rabbit' },
+  bear:     { kind: 'doll', name: '云朵熊团',   rarity: 'common', score: 100, weight: 1.0,  slippery: 0.08, body: '#DCEEFF', ear: 'bear' },
+  strawberry:{ kind: 'doll', name: '草莓兔团',  rarity: 'rare',   score: 200, weight: 1.2,  slippery: 0.45, body: '#FFB7C9', ear: 'rabbit' },
+  shiba:    { kind: 'doll', name: '柴犬元宝',   rarity: 'rare',   score: 200, weight: 1.3,  slippery: 0.42, body: '#F7B24A', ear: 'shiba' },
+  unicorn:  { kind: 'doll', name: '彩虹独角兽', rarity: 'legend', score: 500, weight: 1.55, slippery: 0.68, body: '#E8D5FF', ear: 'unicorn' },
+  rock:     { kind: 'rock',   name: '石头',   weight: 2.6, score: 10 },
+  puffer:   { kind: 'puffer', name: '河豚',   weight: 1.0 },
+  star:     { kind: 'star',   name: '时钟星', weight: 0.8 },
+  wild:     { kind: 'wild',   name: '万能团子', weight: 1.0, score: 150 },
+};
+const DOLL_IDS = Object.keys(ITEMS).filter(k => ITEMS[k].kind === 'doll');
+
+/* ------------------------------- 关卡数值区 ------------------------------- */
+/* dolls: 团子种类→数量（凑三组设计，多为3的倍数）；goal: groups 消除组数 / score 分数 */
+/* 设计原则：团子数量必须大于目标所需（冗余 30%+），因为抓走即消耗、池塘会枯竭；
+   零容错的关卡一次滑落/误抓就注定失败，挫败感过强 */
+const LEVELS = [
+  { goal: { type: 'groups', n: 3 },  time: 75, swing: 1.5,
+    dolls: { cat: 4, rabbit: 4, bear: 4 }, rocks: 0, puffers: 0, stars: 1, wilds: 0 },
+  { goal: { type: 'groups', n: 5 },  time: 85, swing: 1.5,
+    dolls: { cat: 4, rabbit: 4, bear: 4, strawberry: 4, shiba: 4 }, rocks: 2, puffers: 0, stars: 1, wilds: 0 },
+  { goal: { type: 'groups', n: 6 },  time: 85, swing: 1.7,
+    dolls: { cat: 6, rabbit: 6, bear: 4, strawberry: 4 }, rocks: 3, puffers: 0, stars: 1, wilds: 0 },
+  { goal: { type: 'score', n: 1200 }, time: 80, swing: 1.7,
+    dolls: { cat: 6, rabbit: 6, bear: 6, strawberry: 4, shiba: 4 }, rocks: 3, puffers: 1, stars: 1, wilds: 0 },
+  { goal: { type: 'groups', n: 8 },  time: 85, swing: 1.8,
+    dolls: { cat: 6, rabbit: 6, bear: 9, strawberry: 6, shiba: 3 }, rocks: 4, puffers: 1, stars: 1, wilds: 0 },
+  { goal: { type: 'score', n: 2000 }, time: 85, swing: 1.8,
+    dolls: { cat: 6, rabbit: 6, bear: 6, strawberry: 6, shiba: 6, unicorn: 3 }, rocks: 3, puffers: 1, stars: 2, wilds: 0 },
+  { goal: { type: 'groups', n: 9 },  time: 90, swing: 1.9,
+    dolls: { cat: 6, rabbit: 6, bear: 6, strawberry: 6, shiba: 6 }, rocks: 4, puffers: 1, stars: 1, wilds: 1 },
+  { goal: { type: 'score', n: 2800 }, time: 90, swing: 2.0,
+    dolls: { cat: 6, rabbit: 6, bear: 6, strawberry: 6, shiba: 6, unicorn: 3 }, rocks: 5, puffers: 2, stars: 2, wilds: 2 },
 ];
-const RARITY_STYLE = {
-  common: { label: '普通', glow: '#b0bec5', star: false },
-  rare:   { label: '稀有', glow: '#ff8fb2', star: true  },
-  legend: { label: '传说', glow: '#ffd54a', star: true  },
-};
 
-/* -------------------------------- 基础 setup ------------------------------ */
+/* --------------------------------- 基础 ---------------------------------- */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 let SCALE = 1;
-
-/** 画布自适应：逻辑分辨率固定，按窗口等比缩放居中 */
 function resize() {
   const scale = Math.min(innerWidth / CONFIG.W, innerHeight / CONFIG.H);
   canvas.width = CONFIG.W * scale * devicePixelRatio;
@@ -76,12 +96,13 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-/* ------------------------------ 音效合成器 -------------------------------- */
-/* 用 WebAudio 振荡器实时合成，零音频文件 */
+const rand = (a, b) => a + Math.random() * (b - a);
+const dist2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
+const hitRect = (x, y, r) => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+
+/* ------------------------------- 音效合成 -------------------------------- */
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 const ac = new AudioCtx();
-
-/** 播放单个音符 */
 function tone(freq, dur, type = 'sine', vol = 0.18, when = 0) {
   const o = ac.createOscillator(), g = ac.createGain();
   o.type = type; o.frequency.value = freq;
@@ -91,402 +112,629 @@ function tone(freq, dur, type = 'sine', vol = 0.18, when = 0) {
   o.start(ac.currentTime + when); o.stop(ac.currentTime + when + dur);
 }
 const SFX = {
-  drop:    () => tone(500, 0.35, 'sine', 0.10),                       // 下落滑音
-  clamp:   () => { tone(220, 0.08, 'square', 0.15); tone(160, 0.1, 'square', 0.12, 0.06); }, // 闭合咔哒
-  grab:    () => { tone(523, 0.12, 'sine', 0.16); tone(659, 0.15, 'sine', 0.16, 0.09); },    // 夹中上扬
-  slip:    () => { tone(380, 0.18, 'sawtooth', 0.10); tone(240, 0.25, 'sawtooth', 0.09, 0.12); }, // 滑落失落
-  miss:    () => tone(180, 0.2, 'triangle', 0.10),                    // 空夹
-  prize:   () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.16, 'sine', 0.16, i * 0.09)),   // 出货琶音
-  legend:  () => [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, 0.2, 'triangle', 0.16, i * 0.1)), // 传说出货
+  drop:    () => tone(500, 0.3, 'sine', 0.10),
+  clamp:   () => { tone(220, 0.08, 'square', 0.14); tone(160, 0.1, 'square', 0.11, 0.05); },
+  grab:    () => { tone(523, 0.12, 'sine', 0.15); tone(659, 0.14, 'sine', 0.15, 0.08); },
+  miss:    () => tone(180, 0.2, 'triangle', 0.10),
+  deposit: () => tone(880, 0.1, 'sine', 0.14),
+  // 消除音随连击升调：combo 越高音阶越高（爽感递增）
+  eliminate: combo => {
+    const base = [523, 587, 659, 784, 880, 1047];
+    const shift = Math.min(combo - 1, 5);
+    [0, 2, 4].forEach((n, i) => tone(base[Math.min(shift + n, base.length - 1)], 0.14, 'triangle', 0.15, i * 0.07));
+  },
+  slip:    () => { tone(380, 0.18, 'sawtooth', 0.10); tone(240, 0.25, 'sawtooth', 0.09, 0.12); },
+  explode: () => { tone(90, 0.5, 'sawtooth', 0.25); tone(60, 0.6, 'square', 0.2, 0.05); },
+  star:    () => [784, 1047].forEach((f, i) => tone(f, 0.14, 'sine', 0.14, i * 0.07)),
+  tick:    () => tone(1200, 0.05, 'square', 0.07),
+  win:     () => [523, 659, 784, 1047, 1319].forEach((f, i) => tone(f, 0.18, 'triangle', 0.15, i * 0.1)),
+  fail:    () => [440, 392, 330, 262].forEach((f, i) => tone(f, 0.22, 'triangle', 0.12, i * 0.13)),
+  rock:    () => tone(140, 0.15, 'square', 0.12),
 };
 
-/* --------------------------------- 娃娃 ----------------------------------- */
-class Doll {
-  constructor(type, x, y, r) {
-    this.type = type;
+/* ------------------------------- 进度存储 -------------------------------- */
+const store = {
+  get unlock() { return parseInt(localStorage.getItem('tt_unlock') || '1', 10); },
+  set unlock(v) { localStorage.setItem('tt_unlock', String(v)); },
+  get stars() { try { return JSON.parse(localStorage.getItem('tt_stars') || '{}'); } catch { return {}; } },
+  set stars(v) { localStorage.setItem('tt_stars', JSON.stringify(v)); },
+};
+
+/* --------------------------------- 实体 ---------------------------------- */
+/** 池塘中的物品（团子/障碍/道具），带漂浮漂移动画 */
+class PondItem {
+  constructor(typeId, x, y, r) {
+    this.type = ITEMS[typeId];
+    this.typeId = typeId;
+    this.ax = x; this.ay = y;          // 漂浮锚点
     this.x = x; this.y = y; this.r = r;
-    this.vx = 0; this.vy = 0;        // 滑落/补货时的抛物线速度
-    this.state = 'idle';             // idle | grabbed | falling | exiting
-    this.rot = Math.random() * 0.6 - 0.3; // 随机倾斜增加堆叠自然感
-    this.blink = Math.random() * 3;  // 眨眼计时
+    this.state = 'pond';               // pond | hooked | deliver | falling | tray | gone
+    this.phase = rand(0, 6.28);        // 漂浮相位
+    this.driftAmp = rand(6, 14);       // 水平漂移幅度
+    this.driftSpd = rand(0.5, 1.1);    // 漂移速度
+    this.rot = rand(-0.3, 0.3);
+    this.blink = rand(0, 3);
+    // 投递动画
+    this.dt = 0; this.fromX = 0; this.fromY = 0; this.slotIdx = -1;
+    this.vx = 0; this.vy = 0;          // 滑落抛物线
+  }
+  /** 每帧更新漂浮位置（仅 pond 状态） */
+  drift(t) {
+    this.x = this.ax + Math.sin(t * this.driftSpd + this.phase) * this.driftAmp;
+    this.y = this.ay + Math.sin(t * this.driftSpd * 1.3 + this.phase * 2) * 4;
   }
 }
 
-/** 在娃娃堆里随机生成一个娃娃（类型按稀有度加权，位置随机堆叠） */
-function spawnDoll(fromSky = false) {
-  // 稀有度加权随机：传说款天然更少出现在机台里
-  const pool = DOLL_TYPES.flatMap(t =>
-    Array(t.rarity === 'common' ? 5 : t.rarity === 'rare' ? 3 : 1).fill(t));
-  const type = pool[Math.floor(Math.random() * pool.length)];
-  const r = 17 + Math.random() * 9 + (type.rarity === 'legend' ? 4 : 0);
-  const x = 95 + Math.random() * (CONFIG.W - 130);
-  const layer = Math.random();
-  const y = CONFIG.groundY - r - (layer > 0.55 ? r * 1.5 : 0); // 两层堆叠
-  const doll = new Doll(type, x, fromSky ? -r : y, r);
-  if (fromSky) { doll.state = 'falling'; doll.vy = 0; doll.targetY = y; }
-  return doll;
-}
-
-/* --------------------------------- 粒子 ----------------------------------- */
+/** 粒子（纸屑/火花） */
 class Particle {
   constructor(x, y, color) {
     this.x = x; this.y = y;
-    const a = Math.random() * Math.PI * 2, s = 60 + Math.random() * 180;
+    const a = rand(0, Math.PI * 2), s = rand(60, 240);
     this.vx = Math.cos(a) * s; this.vy = Math.sin(a) * s - 120;
-    this.life = 0.7 + Math.random() * 0.6; this.maxLife = this.life;
-    this.color = color; this.size = 3 + Math.random() * 4;
-    this.spin = Math.random() * Math.PI;
+    this.life = rand(0.6, 1.3); this.maxLife = this.life;
+    this.color = color; this.size = rand(3, 7); this.spin = rand(0, 3);
+  }
+}
+/** 漂浮文字（+100、COMBO、+5s 等） */
+class FloatText {
+  constructor(x, y, text, color = '#fff', size = 16) {
+    this.x = x; this.y = y; this.text = text; this.color = color;
+    this.size = size; this.life = 1.1;
   }
 }
 
-/* ------------------------------ 爪子状态机 -------------------------------- */
-/* SWING 摆动待机 → DROP 下落 → CLOSE 闭合判定 → RISE 上升(可能滑落)
-   → TO_EXIT 平移到出货口 → RELEASE 松爪出货 → 回到 SWING */
+/* ------------------------------ 钩子状态机 -------------------------------- */
 const claw = {
-  state: 'SWING',
-  swingT: 0,                 // 摆动相位
-  x: CONFIG.W / 2, y: CONFIG.clawHomeY,
-  openAngle: 1,              // 爪臂张开度 1=全开 0=闭合
-  closeT: 0,
-  grabbed: null,             // 被抓住的娃娃
-  slipAtY: null,             // 预设滑落高度（null=不滑落）
-  gripAccuracy: 0,           // 本次对准精度（调试用）
+  state: 'SWING',        // SWING 摆动 | DROP 下落 | CLOSE 闭合 | RISE 上升 | STUN 眩晕
+  swingT: 0, x: CONFIG.W / 2, y: CONFIG.clawHomeY,
+  openAngle: 1, closeT: 0,
+  grabbed: null, slipAtY: null, accuracy: 0, stunT: 0,
 };
 
-let dolls = [];
-let particles = [];
-let collected = new Set();   // 图鉴：已收集的娃娃名
-let totalCaught = 0;
-let screenShake = 0;         // 屏幕震动量
-let slipBanner = 0;          // 滑落提示横幅计时
-let prizePanel = null;       // 出货面板 { doll, t }
+/* ------------------------------ 游戏全局状态 ------------------------------ */
+const game = {
+  scene: 'menu',         // menu | levels | play | win | fail
+  levelIdx: 0,
+  score: 0, combo: 0, groupsDone: 0,
+  timeLeft: 0, lastTickSec: -1,
+  reviveUsed: false, failReason: '',
+  winStars: 0, winScore: 0,
+  items: [],
+  tray: Array(CONFIG.traySlots).fill(null),
+  particles: [], texts: [],
+  shake: 0, slipBanner: 0, tutorT: 0,
+  pondT: 0,              // 池塘全局时间（驱动漂移）
+};
 
-// 初始机台铺货 10 个
-for (let i = 0; i < 10; i++) dolls.push(spawnDoll());
+/* ------------------------------ 关卡生命周期 ------------------------------ */
+/** 按稀有度分层的生成高度区间 */
+const SPAWN_BANDS = {
+  common: [258, 385], rare: [380, 500], legend: [455, 520],
+  rock: [350, 515], puffer: [300, 465], star: [260, 415], wild: [380, 495],
+};
+const SIZE_RANGE = {
+  common: [18, 24], rare: [20, 26], legend: [26, 30],
+  rock: [20, 26], puffer: [19, 24], star: [13, 15], wild: [19, 23],
+};
 
-/* ------------------------------ 输入：点击下落 ----------------------------- */
-function onTap(cx, cy) {
-  const rect = canvas.getBoundingClientRect();
-  const x = (cx - rect.left) / rect.width * CONFIG.W;
-  const y = (cy - rect.top) / rect.height * CONFIG.H;
-  if (prizePanel) { prizePanel = null; restock(); return; } // 关闭出货面板
-  if (claw.state !== 'SWING') return;
-  ac.resume();               // 浏览器要求用户交互后才能出声
-  claw.state = 'DROP';
-  SFX.drop();
-}
-canvas.addEventListener('pointerdown', e => onTap(e.clientX, e.clientY));
+function startLevel(idx) {
+  const lv = LEVELS[idx];
+  game.levelIdx = idx;
+  game.score = 0; game.combo = 0; game.groupsDone = 0;
+  game.timeLeft = lv.time; game.lastTickSec = Math.ceil(lv.time);
+  game.reviveUsed = false; game.failReason = '';
+  game.items = []; game.tray = Array(CONFIG.traySlots).fill(null);
+  game.particles = []; game.texts = [];
+  game.slipBanner = 0; game.tutorT = idx === 0 ? 3.5 : 0;
+  claw.state = 'SWING'; claw.grabbed = null; claw.openAngle = 1;
 
-/** 出货后补货：新娃娃从天而降落入堆中（补货本身也是视觉爽点） */
-function restock() {
-  while (dolls.filter(d => d.state !== 'exiting').length < 10)
-    dolls.push(spawnDoll(true));
-}
-
-/* ------------------------------ 抓取判定 ---------------------------------- */
-/** 核心判定：对准精度 × 爪力 − 重量惩罚 − 圆滑惩罚 > 阈值 → 抓起 */
-function tryGrab() {
-  const clawHalfWidth = 26;
-  // 找爪子正下方、水平距离最近且在范围内的娃娃
-  const candidates = dolls
-    .filter(d => d.state === 'idle')
-    .map(d => ({ d, dx: Math.abs(d.x - claw.x) }))
-    .filter(({ d, dx }) => dx < d.r + clawHalfWidth && d.y > claw.y)
-    .sort((a, b) => a.dx - b.dx);
-
-  if (!candidates.length) { SFX.miss(); return; } // 空夹
-
-  const { d, dx } = candidates[0];
-  const accuracy = Math.max(0, 1 - dx / (d.r + clawHalfWidth));
-  const grip = accuracy * CONFIG.clawGripPower
-             - CONFIG.weightPenalty * d.type.weight
-             - CONFIG.slipperyPenalty * d.type.slippery;
-  claw.gripAccuracy = accuracy;
-
-  if (grip > CONFIG.gripThreshold) {
-    // 抓起成功，判定上升途中是否滑落（圆滑+越偏越容易滑）
-    const slipChance = CONFIG.slipBase * d.type.slippery * (1 - accuracy)
-                     + 0.08 * d.type.weight;
-    claw.grabbed = d;
-    d.state = 'grabbed';
-    claw.slipAtY = Math.random() < slipChance
-      ? claw.y - (60 + Math.random() * 140)   // 在上升途中某高度滑落
-      : null;
-    SFX.grab();
-    screenShake = 6;
-  } else {
-    SFX.miss(); // 碰到了但夹不住——挫败感（数值可调）
+  // 生成物品：位置随机采样+碰撞排斥
+  const spawnOne = (typeId, bandKey) => {
+    const [y0, y1] = SPAWN_BANDS[bandKey];
+    const [r0, r1] = SIZE_RANGE[bandKey];
+    const r = rand(r0, r1);
+    const P = CONFIG.pond;
+    for (let tries = 0; tries < 60; tries++) {
+      const x = rand(P.x0 + r + 4, P.x1 - r - 4);
+      const y = rand(y0, y1);
+      const overlap = game.items.some(it =>
+        dist2(x, y, it.ax, it.ay) < (r + it.r + 10) ** 2);
+      if (!overlap) { game.items.push(new PondItem(typeId, x, y, r)); return; }
+    }
+    game.items.push(new PondItem(typeId, rand(P.x0 + r, P.x1 - r), rand(y0, y1), r));
+  };
+  for (const [typeId, count] of Object.entries(lv.dolls)) {
+    const bandKey = ITEMS[typeId].rarity;
+    for (let i = 0; i < count; i++) spawnOne(typeId, bandKey);
   }
+  for (let i = 0; i < lv.rocks; i++) spawnOne('rock', 'rock');
+  for (let i = 0; i < lv.puffers; i++) spawnOne('puffer', 'puffer');
+  for (let i = 0; i < lv.stars; i++) spawnOne('star', 'star');
+  for (let i = 0; i < lv.wilds; i++) spawnOne('wild', 'wild');
+
+  game.scene = 'play';
 }
 
-/* -------------------------------- 主循环 ---------------------------------- */
-let lastT = performance.now();
-function loop(now) {
-  const dt = Math.min((now - lastT) / 1000, 0.05);
-  lastT = now;
-  update(dt);
-  render();
-  requestAnimationFrame(loop);
+function endWin() {
+  const lv = LEVELS[game.levelIdx];
+  const ratio = game.timeLeft / lv.time;
+  game.winStars = ratio > 0.45 ? 3 : ratio > 0.2 ? 2 : 1;
+  game.winScore = game.score + Math.floor(game.timeLeft) * 10;  // 剩余时间奖励
+  game.score = game.winScore;
+  // 持久化：解锁下一关 + 记录星级
+  store.unlock = Math.max(store.unlock, Math.min(game.levelIdx + 2, LEVELS.length));
+  const stars = store.stars;
+  stars[game.levelIdx] = Math.max(stars[game.levelIdx] || 0, game.winStars);
+  store.stars = stars;
+  game.scene = 'win';
+  SFX.win();
+  burst(CONFIG.W / 2, 200, '#ffd54a', 30);
+  burst(CONFIG.W / 2, 200, '#ff8fb2', 20);
 }
 
-function update(dt) {
-  // --- 爪子状态机 ---
-  switch (claw.state) {
-    case 'SWING': {
-      claw.swingT += dt * CONFIG.clawSwingSpeed;
-      claw.x = CONFIG.W / 2 + Math.sin(claw.swingT) * CONFIG.clawSwingAmplitude;
-      claw.y = CONFIG.clawHomeY;
-      claw.openAngle = Math.min(1, claw.openAngle + dt * 3);
-      break;
-    }
-    case 'DROP': {
-      claw.y += CONFIG.clawDropSpeed * dt;
-      // 碰到娃娃堆顶或地面就触发闭合
-      const hitDoll = dolls.some(d => d.state === 'idle'
-        && Math.abs(d.x - claw.x) < d.r + 26 && claw.y + 22 > d.y - d.r);
-      if (hitDoll || claw.y + 22 >= CONFIG.groundY) {
-        claw.state = 'CLOSE'; claw.closeT = 0;
-        SFX.clamp();
+function endFail(reason) {
+  if (game.scene !== 'play') return;   // 防止与过关判定同帧冲突
+  game.failReason = reason;
+  game.scene = 'fail';
+  SFX.fail();
+}
+
+/* ------------------------------ 三消槽位逻辑 ------------------------------ */
+/** 物品入槽后消除结算，返回消除组数 */
+function resolveTray() {
+  let groups = 0;
+  let again = true;
+  while (again) {
+    again = false;
+    // 1) 同款自然凑三
+    for (const typeId of DOLL_IDS) {
+      const idxs = game.tray
+        .map((it, i) => (it && it.typeId === typeId) ? i : -1)
+        .filter(i => i >= 0);
+      if (idxs.length >= 3) {
+        eliminate(idxs.slice(0, 3), ITEMS[typeId].score);
+        groups++; again = true; break;
       }
-      break;
     }
-    case 'CLOSE': {
-      claw.closeT += dt;
-      claw.openAngle = Math.max(0, 1 - claw.closeT / CONFIG.closeAnimTime);
-      if (claw.closeT >= CONFIG.closeAnimTime) {
-        tryGrab();
-        claw.state = 'RISE';
-      }
-      break;
-    }
-    case 'RISE': {
-      const speed = claw.grabbed ? CONFIG.clawRiseSpeed : CONFIG.clawRiseSpeed * 1.6;
-      claw.y -= speed * dt;
-      // 娃娃跟随爪子
-      if (claw.grabbed) {
-        claw.grabbed.x = claw.x;
-        claw.grabbed.y = claw.y + 34 + claw.grabbed.r * 0.4;
-        // 到达预设滑落点 → 脱落抛物线坠回
-        if (claw.slipAtY !== null && claw.y <= claw.slipAtY) {
-          const d = claw.grabbed;
-          d.state = 'falling';
-          d.vx = (Math.random() - 0.5) * 120; d.vy = -40;
-          claw.grabbed = null; claw.slipAtY = null;
-          claw.openAngle = 0.5;
-          SFX.slip();
-          slipBanner = 1.6;   // ★ 商业点位标记：此处未来弹出「看广告稳住爪子」
+    if (again) continue;
+    // 2) 万能团子补对：任意同款一对 + 万能 = 消除
+    const wildIdx = game.tray.findIndex(it => it && it.typeId === 'wild');
+    if (wildIdx >= 0) {
+      for (const typeId of DOLL_IDS) {
+        const idxs = game.tray
+          .map((it, i) => (it && it.typeId === typeId) ? i : -1)
+          .filter(i => i >= 0);
+        if (idxs.length === 2) {
+          eliminate([...idxs, wildIdx], ITEMS[typeId].score);
+          groups++; again = true; break;
         }
       }
-      if (claw.y <= CONFIG.clawHomeY) {
-        claw.y = CONFIG.clawHomeY;
-        claw.state = claw.grabbed ? 'TO_EXIT' : 'SWING';
-        claw.swingT = Math.asin(Math.max(-1, Math.min(1,
-          (claw.x - CONFIG.W / 2) / CONFIG.clawSwingAmplitude)));
-      }
-      break;
-    }
-    case 'TO_EXIT': {
-      const dx = CONFIG.exitX - claw.x;
-      const step = 220 * dt;
-      claw.x += Math.abs(dx) < step ? dx : Math.sign(dx) * step;
-      claw.grabbed.x = claw.x;
-      claw.grabbed.y = claw.y + 34 + claw.grabbed.r * 0.4;
-      if (Math.abs(dx) < 1) { claw.state = 'RELEASE'; claw.openAngle = 1; }
-      break;
-    }
-    case 'RELEASE': {
-      const d = claw.grabbed;
-      claw.grabbed = null;
-      d.state = 'exiting'; d.vy = 60; d.vx = 0;
-      break;
     }
   }
+  return groups;
+}
 
-  // --- 娃娃抛物线（滑落/补货/出货入洞） ---
-  dolls.forEach(d => {
-    if (d.state === 'falling') {
-      d.vy += 900 * dt;
-      d.x += d.vx * dt; d.y += d.vy * dt;
-      const floor = d.targetY ?? CONFIG.groundY - d.r;
-      if (d.y >= floor) { d.y = floor; d.state = 'idle'; d.vx = d.vy = 0;
-        burst(d.x, d.y, '#ffffff', 5); }
-    } else if (d.state === 'exiting') {
-      d.vy += 700 * dt; d.y += d.vy * dt;
-      if (d.y > CONFIG.groundY + 40) {
-        // 掉入出货口 → 弹出货面板
-        d.state = 'gone';
-        dolls = dolls.filter(x => x !== d);
-        totalCaught++;
-        collected.add(d.type.name);
-        prizePanel = { doll: d, t: 0 };
-        const isLegend = d.type.rarity === 'legend';
-        isLegend ? SFX.legend() : SFX.prize();
-        burst(CONFIG.exitX, CONFIG.groundY - 20, RARITY_STYLE[d.type.rarity].glow, 30);
-        burst(CONFIG.exitX, CONFIG.groundY - 20, '#ff6fa5', 20);
-        screenShake = 8;
+/** 消除一组：清槽+粒子+计分（连击倍率） */
+function eliminate(idxs, baseScore) {
+  const mult = Math.max(1, game.combo);
+  const gained = baseScore * mult;
+  game.score += gained;
+  game.groupsDone++;
+  let cx = 0;
+  idxs.forEach(i => {
+    const it = game.tray[i];
+    if (it) {
+      const sx = slotX(i);
+      cx += sx;
+      burst(sx, CONFIG.trayY, it.type.body || '#ffd54a', 12);
+      it.state = 'gone';
+      game.tray[i] = null;
+    }
+  });
+  cx /= idxs.length;
+  game.texts.push(new FloatText(cx, CONFIG.trayY - 30,
+    `+${gained}${mult > 1 ? ` x${mult}` : ''}`, '#ffd54a', mult > 1 ? 20 : 16));
+  if (mult > 1)
+    game.texts.push(new FloatText(cx, CONFIG.trayY - 52, `COMBO x${mult}`, '#ff8fb2', 13));
+  SFX.eliminate(Math.max(1, game.combo));
+  game.shake = Math.max(game.shake, 3 + mult);
+  checkGoal();
+}
+
+/** 检查关卡目标是否达成 */
+function checkGoal() {
+  const lv = LEVELS[game.levelIdx];
+  const done = lv.goal.type === 'groups'
+    ? game.groupsDone >= lv.goal.n
+    : game.score >= lv.goal.n;
+  if (done && game.scene === 'play') endWin();
+}
+
+/* ------------------------------ 钩子交互逻辑 ------------------------------ */
+/** 下落过程中的碰撞检测：钩尖碰到第一个物品即抓取 */
+function hookCollide() {
+  const tipX = claw.x, tipY = claw.y + CONFIG.hookLen;
+  for (const it of game.items) {
+    if (it.state !== 'pond') continue;
+    if (dist2(tipX, tipY, it.x, it.y) < (it.r + 7) ** 2) return it;
+  }
+  return null;
+}
+
+/** 命中物品后的分流处理 */
+function onHookHit(it) {
+  if (it.type.kind === 'puffer') {
+    // 河豚爆炸：震开周围物品，空手而归+眩晕
+    explodeAt(it);
+    claw.state = 'STUN'; claw.stunT = CONFIG.stunTime;
+    claw.openAngle = 1;
+    return;
+  }
+  // 普通抓取
+  claw.state = 'CLOSE'; claw.closeT = 0;
+  claw.grabbed = it; it.state = 'hooked';
+  claw.accuracy = Math.max(0, 1 - Math.abs(it.x - claw.x) / (it.r + 20));
+  SFX.clamp();
+}
+
+/** 河豚爆炸效果 */
+function explodeAt(puffer) {
+  puffer.state = 'gone';
+  game.items = game.items.filter(x => x !== puffer);
+  burst(puffer.x, puffer.y, '#ff5a76', 26);
+  burst(puffer.x, puffer.y, '#ffd54a', 14);
+  game.texts.push(new FloatText(puffer.x, puffer.y - 20, '💥 爆炸！', '#ff5a76', 18));
+  // 冲击波推开周围物品锚点
+  game.items.forEach(it => {
+    if (it.state !== 'pond') return;
+    const d2 = dist2(puffer.x, puffer.y, it.ax, it.ay);
+    if (d2 < 130 ** 2) {
+      const d = Math.sqrt(d2) || 1;
+      const push = (130 - d) * 0.5;
+      it.ax += (it.ax - puffer.x) / d * push;
+      it.ay += (it.ay - puffer.y) / d * push * 0.6;
+      const P = CONFIG.pond;
+      it.ax = Math.max(P.x0 + it.r, Math.min(P.x1 - it.r, it.ax));
+      it.ay = Math.max(P.y0 + it.r, Math.min(P.y1 - it.r, it.ay));
+    }
+  });
+  game.shake = 14;
+  SFX.explode();
+}
+
+/** 物品到达顶部后的分流：进槽/弃石头/加时间 */
+function deliverItem(it) {
+  const kind = it.type.kind;
+  if (kind === 'rock') {
+    // 石头：安慰分 10，直接丢弃
+    game.score += 10;
+    game.texts.push(new FloatText(claw.x, claw.y + 40, '+10 破石头…', '#aaa', 13));
+    it.state = 'gone';
+    game.items = game.items.filter(x => x !== it);
+    SFX.rock();
+    game.combo = 0;   // 抓石头中断连击
+    return;
+  }
+  if (kind === 'star') {
+    game.timeLeft += 5;
+    game.texts.push(new FloatText(claw.x, claw.y + 40, '⏰ +5秒', '#8fd3ff', 17));
+    burst(claw.x, claw.y + 30, '#8fd3ff', 14);
+    it.state = 'gone';
+    game.items = game.items.filter(x => x !== it);
+    SFX.star();
+    return;
+  }
+  // 团子/万能 → 飞入槽位
+  const slotIdx = game.tray.findIndex(s => s === null);
+  if (slotIdx < 0) { // 理论上不会发生（槽满即败），防御性丢弃
+    it.state = 'gone'; game.items = game.items.filter(x => x !== it); return;
+  }
+  it.state = 'deliver';
+  it.dt = 0; it.fromX = it.x; it.fromY = it.y; it.slotIdx = slotIdx;
+  SFX.deposit();
+}
+
+/** 投递动画结束 → 入槽结算 */
+function trayArrive(it) {
+  game.tray[it.slotIdx] = it;
+  it.state = 'tray';
+  game.combo++;                          // 先假设延续连击
+  const groups = resolveTray();
+  if (groups === 0) game.combo = 0;      // 未消除 → 连击中断
+  // 槽满且无法消除 → 失败
+  if (game.scene === 'play' && game.tray.every(s => s !== null))
+    endFail('full');
+}
+
+/* --------------------------------- 更新 ---------------------------------- */
+function update(dt) {
+  game.pondT += dt;
+  game.shake = Math.max(0, game.shake - dt * 30);
+  game.slipBanner = Math.max(0, game.slipBanner - dt);
+
+  if (game.scene === 'play') {
+    game.tutorT = Math.max(0, game.tutorT - dt);
+    // 倒计时
+    game.timeLeft -= dt;
+    const sec = Math.ceil(game.timeLeft);
+    if (sec !== game.lastTickSec) {
+      game.lastTickSec = sec;
+      if (sec <= 10 && sec > 0) SFX.tick();
+    }
+    if (game.timeLeft <= 0) { game.timeLeft = 0; endFail('time'); }
+
+    // --- 钩子状态机 ---
+    switch (claw.state) {
+      case 'SWING': {
+        claw.swingT += dt * LEVELS[game.levelIdx].swing;
+        claw.x = CONFIG.W / 2 + Math.sin(claw.swingT) * CONFIG.clawSwingAmplitude;
+        claw.y = CONFIG.clawHomeY;
+        claw.openAngle = Math.min(1, claw.openAngle + dt * 3);
+        break;
+      }
+      case 'DROP': {
+        claw.y += CONFIG.clawDropSpeed * dt;
+        const hit = hookCollide();
+        if (hit) onHookHit(hit);
+        else if (claw.y + CONFIG.hookLen >= CONFIG.pond.y1 + 10) {
+          claw.state = 'RISE'; // 空钩到底，直接返回
+          SFX.miss();
+        }
+        break;
+      }
+      case 'CLOSE': {
+        claw.closeT += dt;
+        claw.openAngle = Math.max(0, 1 - claw.closeT / CONFIG.closeAnimTime);
+        if (claw.closeT >= CONFIG.closeAnimTime) {
+          // 传说款滑落判定
+          const it = claw.grabbed;
+          if (it && it.type.slippery) {
+            const slipChance = CONFIG.slipBase * it.type.slippery * (1 - claw.accuracy)
+                             + 0.05 * it.type.weight;
+            claw.slipAtY = Math.random() < slipChance
+              ? claw.y - rand(60, 200) : null;
+          }
+          claw.state = 'RISE';
+          SFX.grab();
+          game.shake = Math.max(game.shake, 4);
+        }
+        break;
+      }
+      case 'RISE': {
+        const w = claw.grabbed ? claw.grabbed.type.weight : 1;
+        claw.y -= (CONFIG.clawRiseBase / w) * dt;
+        if (claw.grabbed) {
+          claw.grabbed.x = claw.x;
+          claw.grabbed.y = claw.y + CONFIG.hookLen + claw.grabbed.r * 0.4;
+          // 传说滑落
+          if (claw.slipAtY !== null && claw.y <= claw.slipAtY) {
+            const d = claw.grabbed;
+            d.state = 'falling'; d.vx = rand(-90, 90); d.vy = -50;
+            claw.grabbed = null; claw.slipAtY = null;
+            claw.openAngle = 0.5;
+            SFX.slip();
+            game.slipBanner = 1.6;   // ★ 激励视频点位：看广告稳住钩子
+          }
+        }
+        if (claw.y <= CONFIG.clawHomeY) {
+          claw.y = CONFIG.clawHomeY;
+          if (claw.grabbed) {
+            const it = claw.grabbed;
+            claw.grabbed = null;
+            deliverItem(it);
+          }
+          claw.state = 'SWING';
+          claw.swingT = Math.asin(Math.max(-1, Math.min(1,
+            (claw.x - CONFIG.W / 2) / CONFIG.clawSwingAmplitude)));
+        }
+        break;
+      }
+      case 'STUN': {
+        claw.stunT -= dt;
+        claw.y = Math.max(CONFIG.clawHomeY, claw.y - CONFIG.clawRiseBase * 1.8 * dt);
+        if (claw.stunT <= 0) claw.state = 'SWING';
+        break;
       }
     }
-    d.blink += dt;
-  });
 
-  // --- 粒子 ---
-  particles.forEach(p => {
+    // --- 物品更新 ---
+    game.items.forEach(it => {
+      if (it.state === 'pond') it.drift(game.pondT);
+      else if (it.state === 'deliver') {
+        it.dt += dt / CONFIG.deliverTime;
+        if (it.dt >= 1) { trayArrive(it); }
+        else {
+          const tx = slotX(it.slotIdx), ty = CONFIG.trayY;
+          const t = it.dt, e = t * (2 - t);       // easeOut
+          it.x = it.fromX + (tx - it.fromX) * e;
+          it.y = it.fromY + (ty - it.fromY) * e - Math.sin(t * Math.PI) * 60; // 弧线
+        }
+      } else if (it.state === 'falling') {
+        it.vy += 900 * dt;
+        it.x += it.vx * dt; it.y += it.vy * dt;
+        if (it.y >= CONFIG.pond.y1 - it.r) {
+          // 落回池塘，重新锚定
+          it.ay = CONFIG.pond.y1 - it.r - rand(0, 30);
+          it.ax = Math.max(CONFIG.pond.x0 + it.r, Math.min(CONFIG.pond.x1 - it.r, it.x));
+          it.state = 'pond';
+          burst(it.x, it.y, '#fff', 5);
+        }
+      }
+      it.blink += dt;
+    });
+  }
+
+  // --- 粒子/漂浮文字（所有场景通用） ---
+  game.particles.forEach(p => {
     p.vy += 500 * dt;
     p.x += p.vx * dt; p.y += p.vy * dt;
     p.life -= dt; p.spin += dt * 6;
   });
-  particles = particles.filter(p => p.life > 0);
-
-  screenShake = Math.max(0, screenShake - dt * 30);
-  slipBanner = Math.max(0, slipBanner - dt);
-  if (prizePanel) prizePanel.t += dt;
+  game.particles = game.particles.filter(p => p.life > 0);
+  game.texts.forEach(t => { t.y -= 32 * dt; t.life -= dt; });
+  game.texts = game.texts.filter(t => t.life > 0);
 }
 
-/** 生成一发粒子 */
 function burst(x, y, color, n) {
-  for (let i = 0; i < n; i++) particles.push(new Particle(x, y, color));
+  for (let i = 0; i < n; i++) game.particles.push(new Particle(x, y, color));
+}
+function slotX(i) {
+  const totalW = CONFIG.traySlots * CONFIG.slotW;
+  return (CONFIG.W - totalW) / 2 + i * CONFIG.slotW + CONFIG.slotW / 2;
 }
 
-/* --------------------------------- 绘制 ----------------------------------- */
+/* --------------------------------- 绘制 ---------------------------------- */
 function render() {
   ctx.save();
   ctx.scale(SCALE, SCALE);
-  // 屏幕震动
-  if (screenShake > 0)
-    ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+  if (game.shake > 0)
+    ctx.translate(rand(-0.5, 0.5) * game.shake, rand(-0.5, 0.5) * game.shake);
 
   drawBackground();
-  drawMachine();
-  // 娃娃（先画下层后画上层）
-  [...dolls].sort((a, b) => a.y - b.y).forEach(drawDoll);
-  drawClaw();
-  drawGlass();      // 玻璃罩盖在娃娃和爪子上，反光质感
-  particles.forEach(drawParticle);
-  drawHUD();
-  if (slipBanner > 0) drawSlipBanner();
-  if (prizePanel) drawPrizePanel(prizePanel);
+  if (game.scene === 'menu') drawMenu();
+  else if (game.scene === 'levels') drawLevelSelect();
+  else {
+    drawPond();
+    // 物品按深度排序绘制（深的先画）
+    [...game.items].sort((a, b) => a.y - b.y).forEach(drawItem);
+    drawClaw();
+    game.particles.forEach(drawParticle);
+    drawTray();
+    drawHUD();
+    game.texts.forEach(drawFloatText);
+    if (game.slipBanner > 0) drawSlipBanner();
+    if (game.tutorT > 0) drawTutor();
+    if (game.scene === 'win') drawWinPanel();
+    if (game.scene === 'fail') drawFailPanel();
+  }
   ctx.restore();
 }
 
 function drawBackground() {
   const g = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
-  g.addColorStop(0, '#2a1e3f'); g.addColorStop(1, '#4a2c5a');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+  g.addColorStop(0, '#1c1440'); g.addColorStop(1, '#3a2660');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
 }
 
-/** 机台外壳+滑轨+出货口 */
-function drawMachine() {
-  // 外壳
-  roundRect(10, 88, CONFIG.W - 20, CONFIG.groundY + 60, 18);
-  const mg = ctx.createLinearGradient(0, 88, 0, CONFIG.groundY + 60);
-  mg.addColorStop(0, '#ff9ec4'); mg.addColorStop(1, '#e86ba0');
-  ctx.fillStyle = mg; ctx.fill();
-  // 内腔（玻璃后面的空间）
-  roundRect(22, CONFIG.railY - 12, CONFIG.W - 44, CONFIG.groundY - CONFIG.railY + 52, 12);
-  ctx.fillStyle = '#fdf0f6'; ctx.fill();
-  // 滑轨
-  roundRect(30, CONFIG.railY - 8, CONFIG.W - 60, 12, 6);
-  ctx.fillStyle = '#8e6fa8'; ctx.fill();
-  // 跑马灯（顶部交替闪烁）
-  const t = performance.now() / 300;
-  for (let i = 0; i < 9; i++) {
-    const x = 30 + i * (CONFIG.W - 60) / 8;
-    ctx.beginPath(); ctx.arc(x, 97, 5, 0, 7);
-    ctx.fillStyle = (i + Math.floor(t)) % 2 ? '#ffd54a' : '#ff6fa5';
-    ctx.fill();
+/** 池塘水体 */
+function drawPond() {
+  const P = CONFIG.pond;
+  roundRect(P.x0 - 6, P.y0 - 18, P.x1 - P.x0 + 12, P.y1 - P.y0 + 30, 16);
+  ctx.fillStyle = '#5a4a88'; ctx.fill();   // 池边
+  roundRect(P.x0, P.y0, P.x1 - P.x0, P.y1 - P.y0, 12);
+  const wg = ctx.createLinearGradient(0, P.y0, 0, P.y1);
+  wg.addColorStop(0, '#8fd3ff'); wg.addColorStop(0.5, '#7aa8e8'); wg.addColorStop(1, '#5a6fc0');
+  ctx.fillStyle = wg; ctx.fill();
+  // 波光：两条移动的正弦亮线
+  ctx.save();
+  roundRect(P.x0, P.y0, P.x1 - P.x0, P.y1 - P.y0, 12); ctx.clip();
+  ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 2;
+  [0.35, 0.6].forEach((frac, li) => {
+    const baseY = P.y0 + (P.y1 - P.y0) * frac;
+    ctx.beginPath();
+    for (let x = P.x0; x <= P.x1; x += 6) {
+      const y = baseY + Math.sin(x * 0.06 + game.pondT * (1.2 + li * 0.5)) * 4;
+      x === P.x0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  });
+  // 顶部水面高光
+  ctx.fillStyle = 'rgba(255,255,255,0.18)';
+  ctx.fillRect(P.x0, P.y0, P.x1 - P.x0, 6);
+  ctx.restore();
+}
+
+/** 通用物品绘制分发 */
+function drawItem(it) {
+  if (it.state === 'gone') return;
+  ctx.save();
+  ctx.translate(it.x, it.y);
+  const k = it.type.kind;
+  if (k === 'doll' || k === 'wild') drawDollBody(it);
+  else if (k === 'rock') drawRock(it);
+  else if (k === 'puffer') drawPuffer(it);
+  else if (k === 'star') drawStar(it);
+  ctx.restore();
+}
+
+/** 团子身体（复用 v1 的可爱绘制） */
+function drawDollBody(d) {
+  const r = d.r;
+  const isWild = d.typeId === 'wild';
+  let body = d.type.body;
+  if (isWild) {
+    // 万能团子：彩虹渐变身体
+    const rg = ctx.createLinearGradient(-r, -r, r, r);
+    ['#ff8fb2', '#ffd54a', '#8fd3ff', '#c5a3ff'].forEach((c, i) =>
+      rg.addColorStop(i / 3, c));
+    body = rg;
   }
-  // 出货口（左下拱形黑洞）
-  ctx.beginPath();
-  ctx.arc(CONFIG.exitX, CONFIG.groundY + 28, 30, Math.PI, 0);
-  ctx.lineTo(CONFIG.exitX + 30, CONFIG.groundY + 46);
-  ctx.lineTo(CONFIG.exitX - 30, CONFIG.groundY + 46);
-  ctx.closePath();
-  ctx.fillStyle = '#3a2340'; ctx.fill();
-  ctx.fillStyle = '#ffd54a';
-  ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
-  ctx.fillText('出 货 口', CONFIG.exitX, CONFIG.groundY + 58);
-}
+  ctx.rotate(d.state === 'hooked' ? Math.sin(game.pondT * 5) * 0.08 : d.rot);
 
-/** 玻璃罩：半透明+斜向高光（画在最上层模拟真实机台） */
-function drawGlass() {
-  ctx.save();
-  roundRect(22, CONFIG.railY - 12, CONFIG.W - 44, CONFIG.groundY - CONFIG.railY + 40, 12);
-  ctx.fillStyle = 'rgba(200,230,255,0.10)'; ctx.fill();
-  ctx.clip();
-  ctx.fillStyle = 'rgba(255,255,255,0.08)';
-  ctx.save();
-  ctx.translate(0, 0); ctx.rotate(-0.35);
-  ctx.fillRect(40, -80, 60, 800);
-  ctx.fillRect(150, -80, 22, 800);
-  ctx.restore();
-  ctx.restore();
-}
-
-/** 绘制单个娃娃（程序化卡通脸，耳朵形状区分物种） */
-function drawDoll(d) {
-  if (d.state === 'gone') return;
-  ctx.save();
-  ctx.translate(d.x, d.y);
-  ctx.rotate(d.state === 'grabbed' ? Math.sin(performance.now() / 200) * 0.08 : d.rot);
-  const r = d.r, body = d.type.body;
-
-  // 耳朵
-  ctx.fillStyle = body;
-  const ear = d.type.ear;
-  if (ear === 'cat' || ear === 'shiba') {
-    // 三角耳
-    [[-1, 0], [1, 0]].forEach(([s]) => {
-      ctx.beginPath();
-      ctx.moveTo(s * r * 0.72, -r * 0.35);
-      ctx.lineTo(s * r * 0.42, -r * 1.15);
-      ctx.lineTo(s * r * 0.12, -r * 0.55);
-      ctx.closePath(); ctx.fill();
-    });
-    if (ear === 'shiba') { // 柴犬褐色耳尖
-      ctx.fillStyle = '#c77f2e';
+  if (!isWild) {
+    // 耳朵（按物种）
+    ctx.fillStyle = body;
+    const ear = d.type.ear;
+    if (ear === 'cat' || ear === 'shiba') {
       [[-1], [1]].forEach(([s]) => {
         ctx.beginPath();
-        ctx.moveTo(s * r * 0.55, -r * 0.72);
+        ctx.moveTo(s * r * 0.72, -r * 0.35);
         ctx.lineTo(s * r * 0.42, -r * 1.15);
-        ctx.lineTo(s * r * 0.30, -r * 0.72);
+        ctx.lineTo(s * r * 0.12, -r * 0.55);
         ctx.closePath(); ctx.fill();
       });
+      if (ear === 'shiba') {
+        ctx.fillStyle = '#c77f2e';
+        [[-1], [1]].forEach(([s]) => {
+          ctx.beginPath();
+          ctx.moveTo(s * r * 0.55, -r * 0.72);
+          ctx.lineTo(s * r * 0.42, -r * 1.15);
+          ctx.lineTo(s * r * 0.30, -r * 0.72);
+          ctx.closePath(); ctx.fill();
+        });
+      }
+    } else if (ear === 'rabbit') {
+      [[-1], [1]].forEach(([s]) => {
+        ctx.save();
+        ctx.translate(s * r * 0.38, -r * 0.9);
+        ctx.rotate(s * 0.18);
+        ctx.beginPath(); ctx.ellipse(0, 0, r * 0.22, r * 0.62, 0, 0, 7);
+        ctx.fillStyle = body; ctx.fill();
+        ctx.beginPath(); ctx.ellipse(0, r * 0.05, r * 0.11, r * 0.4, 0, 0, 7);
+        ctx.fillStyle = 'rgba(255,140,170,0.55)'; ctx.fill();
+        ctx.restore();
+      });
+    } else if (ear === 'bear') {
+      [[-1], [1]].forEach(([s]) => {
+        ctx.beginPath(); ctx.arc(s * r * 0.55, -r * 0.62, r * 0.3, 0, 7);
+        ctx.fillStyle = body; ctx.fill();
+      });
+    } else if (ear === 'unicorn') {
+      ctx.beginPath();
+      ctx.moveTo(0, -r * 0.6); ctx.lineTo(-r * 0.16, -r * 1.05); ctx.lineTo(r * 0.16, -r * 1.05);
+      ctx.closePath(); ctx.fillStyle = body; ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.12, -r * 0.95); ctx.lineTo(0, -r * 1.55); ctx.lineTo(r * 0.12, -r * 0.95);
+      ctx.closePath(); ctx.fillStyle = '#ffd54a'; ctx.fill();
     }
-  } else if (ear === 'rabbit') {
-    // 长椭圆兔耳
-    [[-1], [1]].forEach(([s]) => {
-      ctx.save();
-      ctx.translate(s * r * 0.38, -r * 0.9);
-      ctx.rotate(s * 0.18);
-      ctx.beginPath(); ctx.ellipse(0, 0, r * 0.22, r * 0.62, 0, 0, 7);
-      ctx.fillStyle = body; ctx.fill();
-      ctx.beginPath(); ctx.ellipse(0, r * 0.05, r * 0.11, r * 0.4, 0, 0, 7);
-      ctx.fillStyle = 'rgba(255,140,170,0.55)'; ctx.fill();
-      ctx.restore();
-    });
-  } else if (ear === 'bear') {
-    [[-1], [1]].forEach(([s]) => {
-      ctx.beginPath(); ctx.arc(s * r * 0.55, -r * 0.62, r * 0.3, 0, 7);
-      ctx.fillStyle = body; ctx.fill();
-    });
-  } else if (ear === 'unicorn') {
-    // 金色独角
-    ctx.beginPath();
-    ctx.moveTo(0, -r * 0.6); ctx.lineTo(-r * 0.16, -r * 1.05); ctx.lineTo(r * 0.16, -r * 1.05);
-    ctx.closePath(); ctx.fillStyle = body; ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(-r * 0.12, -r * 0.95); ctx.lineTo(0, -r * 1.55); ctx.lineTo(r * 0.12, -r * 0.95);
-    ctx.closePath(); ctx.fillStyle = '#ffd54a'; ctx.fill();
   }
 
-  // 身体（带底部暗部增加立体感）
+  // 身体
   ctx.beginPath(); ctx.arc(0, 0, r, 0, 7);
   ctx.fillStyle = body; ctx.fill();
   ctx.beginPath(); ctx.arc(0, r * 0.25, r * 0.85, 0.15 * Math.PI, 0.85 * Math.PI);
   ctx.fillStyle = 'rgba(0,0,0,0.07)'; ctx.fill();
 
-  // 眼睛（眨眼：每 3 秒闭合 0.12 秒）
+  if (isWild) {
+    // 万能团子画问号脸
+    ctx.fillStyle = '#fff'; ctx.font = `bold ${r}px sans-serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('?', 0, r * 0.05);
+    ctx.textBaseline = 'alphabetic';
+    return;
+  }
+
+  // 眼睛（眨眼）
   const blinking = (d.blink % 3) < 0.12;
   [[-1], [1]].forEach(([s]) => {
     const ex = s * r * 0.34, ey = -r * 0.05;
@@ -500,22 +748,22 @@ function drawDoll(d) {
       ctx.fillStyle = '#fff'; ctx.fill();
     }
   });
-  // 腮红
+  // 腮红 + ω 嘴
   [[-1], [1]].forEach(([s]) => {
     ctx.beginPath(); ctx.arc(s * r * 0.58, r * 0.22, r * 0.15, 0, 7);
     ctx.fillStyle = 'rgba(255,120,150,0.45)'; ctx.fill();
   });
-  // ω 嘴
   ctx.beginPath();
   ctx.arc(-r * 0.09, r * 0.16, r * 0.09, 0.1 * Math.PI, 0.95 * Math.PI);
   ctx.arc(r * 0.09, r * 0.16, r * 0.09, 0.05 * Math.PI, 0.9 * Math.PI);
   ctx.strokeStyle = '#4a3a4a'; ctx.lineWidth = 1.4; ctx.stroke();
 
-  // 稀有款星星闪光
-  if (RARITY_STYLE[d.type.rarity].star) {
-    const tw = performance.now() / 400;
-    ctx.fillStyle = RARITY_STYLE[d.type.rarity].glow;
-    [[-r * 0.9, -r * 0.6], [r * 0.95, -r * 0.2]].forEach(([sx, sy], i) => {
+  // 稀有款闪光
+  if (d.type.rarity !== 'common') {
+    const tw = game.pondT * 2.5;
+    const glow = d.type.rarity === 'legend' ? '#ffd54a' : '#ff8fb2';
+    ctx.fillStyle = glow;
+    [[-r * 0.95, -r * 0.6], [r * 1.0, -r * 0.15]].forEach(([sx, sy], i) => {
       const a = 0.4 + 0.6 * Math.abs(Math.sin(tw + i * 1.7));
       ctx.globalAlpha = a;
       ctx.beginPath();
@@ -524,39 +772,129 @@ function drawDoll(d) {
       ctx.globalAlpha = 1;
     });
   }
-  ctx.restore();
 }
 
-/** 爪子：滑块+缆绳+三爪头（侧视简化为两臂钳） */
+/** 石头：灰色不规则块+裂纹 */
+function drawRock(it) {
+  const r = it.r;
+  ctx.rotate(it.rot);
+  ctx.beginPath();
+  for (let i = 0; i < 7; i++) {
+    const a = i / 7 * Math.PI * 2;
+    const rr = r * (0.85 + 0.25 * Math.sin(i * 2.7 + it.phase));
+    i === 0 ? ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr)
+            : ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  const g = ctx.createLinearGradient(-r, -r, r, r);
+  g.addColorStop(0, '#9a9aa8'); g.addColorStop(1, '#5f5f70');
+  ctx.fillStyle = g; ctx.fill();
+  ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.4, -r * 0.2); ctx.lineTo(0, 0); ctx.lineTo(r * 0.3, r * 0.35);
+  ctx.stroke();
+}
+
+/** 河豚：膨胀脉动+尖刺+生气脸（危险预警） */
+function drawPuffer(it) {
+  const r = it.r * (1 + 0.08 * Math.sin(game.pondT * 4 + it.phase));
+  // 尖刺
+  ctx.fillStyle = '#c9456a';
+  for (let i = 0; i < 10; i++) {
+    const a = i / 10 * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r * 0.9, Math.sin(a) * r * 0.9);
+    ctx.lineTo(Math.cos(a + 0.12) * r * 1.35, Math.sin(a + 0.12) * r * 1.35);
+    ctx.lineTo(Math.cos(a + 0.24) * r * 0.9, Math.sin(a + 0.24) * r * 0.9);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, 7);
+  const g = ctx.createLinearGradient(-r, -r, r, r);
+  g.addColorStop(0, '#ff7a95'); g.addColorStop(1, '#d9456a');
+  ctx.fillStyle = g; ctx.fill();
+  // 生气的眼睛（斜线眉）
+  [[-1], [1]].forEach(([s]) => {
+    ctx.beginPath(); ctx.arc(s * r * 0.32, -r * 0.1, r * 0.12, 0, 7);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.beginPath(); ctx.arc(s * r * 0.32, -r * 0.1, r * 0.06, 0, 7);
+    ctx.fillStyle = '#333'; ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(s * r * 0.5, -r * 0.38); ctx.lineTo(s * r * 0.15, -r * 0.22);
+    ctx.strokeStyle = '#8a2038'; ctx.lineWidth = 2; ctx.stroke();
+  });
+  ctx.beginPath(); ctx.arc(0, r * 0.3, r * 0.14, Math.PI, 0);
+  ctx.strokeStyle = '#8a2038'; ctx.lineWidth = 2; ctx.stroke();
+}
+
+/** 时钟星：旋转发光五角星 */
+function drawStar(it) {
+  const r = it.r;
+  ctx.rotate(game.pondT * 1.5);
+  const gg = ctx.createRadialGradient(0, 0, 2, 0, 0, r * 2.2);
+  gg.addColorStop(0, 'rgba(255,230,120,0.8)'); gg.addColorStop(1, 'rgba(255,230,120,0)');
+  ctx.fillStyle = gg;
+  ctx.beginPath(); ctx.arc(0, 0, r * 2.2, 0, 7); ctx.fill();
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const a = -Math.PI / 2 + i * Math.PI / 5;
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    i === 0 ? ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr)
+            : ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = '#ffe678'; ctx.fill();
+  ctx.strokeStyle = '#e8b83a'; ctx.lineWidth = 1; ctx.stroke();
+}
+
+/** 爪子（同 v1：滑块+缆绳+两臂钳） */
 function drawClaw() {
   const open = claw.openAngle;
-  // 滑块
   roundRect(claw.x - 16, CONFIG.railY - 10, 32, 16, 5);
-  ctx.fillStyle = '#7c5f99'; ctx.fill();
-  // 缆绳
+  ctx.fillStyle = '#8a6fb0'; ctx.fill();
   ctx.beginPath(); ctx.moveTo(claw.x, CONFIG.railY); ctx.lineTo(claw.x, claw.y + 4);
   ctx.strokeStyle = '#d8cfe8'; ctx.lineWidth = 2.5; ctx.stroke();
-  // 爪头中心
   ctx.save();
   ctx.translate(claw.x, claw.y + 8);
   ctx.beginPath(); ctx.arc(0, 0, 9, 0, 7);
   const hg = ctx.createLinearGradient(-9, -9, 9, 9);
   hg.addColorStop(0, '#e8e8f5'); hg.addColorStop(1, '#8f8fb0');
   ctx.fillStyle = hg; ctx.fill();
-  // 两臂（张开度 open: 1 全开 → 0 闭合）
-  const spread = 0.25 + open * 0.75;   // 臂展开角度（弧度）
+  const spread = 0.25 + open * 0.75;
   [[-1], [1]].forEach(([s]) => {
     ctx.save();
     ctx.rotate(s * spread);
-    // 臂杆
     ctx.beginPath();
     ctx.moveTo(0, 2);
-    ctx.quadraticCurveTo(s * 10, 14, s * 6, 26);   // 向内弯曲的爪指
+    ctx.quadraticCurveTo(s * 10, 14, s * 6, 26);
     ctx.lineWidth = 5.5; ctx.lineCap = 'round';
     ctx.strokeStyle = '#b8b8d8'; ctx.stroke();
     ctx.restore();
   });
   ctx.restore();
+}
+
+/** 底部槽位：7 格 + 槽内物品缩略 */
+function drawTray() {
+  const totalW = CONFIG.traySlots * CONFIG.slotW;
+  const x0 = (CONFIG.W - totalW) / 2;
+  // 底板
+  roundRect(x0 - 8, CONFIG.trayY - 26, totalW + 16, 52, 12);
+  ctx.fillStyle = 'rgba(255,255,255,0.10)'; ctx.fill();
+  for (let i = 0; i < CONFIG.traySlots; i++) {
+    const x = x0 + i * CONFIG.slotW;
+    roundRect(x + 2, CONFIG.trayY - 21, CONFIG.slotW - 4, 42, 8);
+    ctx.fillStyle = 'rgba(255,255,255,0.14)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1; ctx.stroke();
+    const it = game.tray[i];
+    if (it) {
+      ctx.save();
+      ctx.translate(slotX(i), CONFIG.trayY);
+      ctx.scale(16 / it.r, 16 / it.r);   // 缩放到槽位大小
+      // 复用绘制（以 0,0 为中心）
+      drawDollBody({ ...it, x: 0, y: 0, rot: 0, state: 'tray' });
+      ctx.restore();
+    }
+  }
 }
 
 function drawParticle(p) {
@@ -568,81 +906,186 @@ function drawParticle(p) {
   ctx.restore();
 }
 
-/** 顶部 HUD：标题+图鉴进度+抓到计数 */
-function drawHUD() {
+function drawFloatText(t) {
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, t.life);
   ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffe3f0';
-  ctx.font = 'bold 22px sans-serif';
-  ctx.fillText('心 动 娃 娃 机', CONFIG.W / 2, 40);
-  ctx.font = '12px sans-serif';
-  ctx.fillStyle = '#c9a8d8';
-  ctx.fillText(`图鉴 ${collected.size}/${DOLL_TYPES.length} · 已抓到 ${totalCaught} 只`,
-    CONFIG.W / 2, 62);
-  // 底部操作提示
-  ctx.fillStyle = 'rgba(255,255,255,0.75)';
-  ctx.font = '13px sans-serif';
-  const hint = claw.state === 'SWING'
-    ? '👇 点击屏幕任意处，放下爪子！'
-    : '';
-  ctx.fillText(hint, CONFIG.W / 2, CONFIG.H - 30);
-  ctx.font = '10px sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.fillText('玩法原型 · 数值未调 · 仅验证手感', CONFIG.W / 2, CONFIG.H - 12);
+  ctx.fillStyle = t.color;
+  ctx.font = `bold ${t.size}px sans-serif`;
+  ctx.fillText(t.text, t.x, t.y);
+  ctx.restore();
 }
 
-/** 滑落提示横幅（★ 标记未来激励视频点位） */
+/** 顶部 HUD：关卡+目标进度+分数+倒计时条 */
+function drawHUD() {
+  const lv = LEVELS[game.levelIdx];
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe3f0';
+  ctx.font = 'bold 17px sans-serif';
+  ctx.fillText(`第 ${game.levelIdx + 1} 关`, CONFIG.W / 2, 30);
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = '#c9a8d8';
+  const goalText = lv.goal.type === 'groups'
+    ? `目标：消除 ${game.groupsDone}/${lv.goal.n} 组`
+    : `目标：${game.score}/${lv.goal.n} 分`;
+  ctx.fillText(`${goalText} · 分数 ${game.score}`, CONFIG.W / 2, 50);
+  // 倒计时条
+  const ratio = Math.max(0, game.timeLeft / lv.time);
+  const bw = CONFIG.W - 60;
+  roundRect(30, 58, bw, 10, 5);
+  ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fill();
+  roundRect(30, 58, bw * ratio, 10, 5);
+  ctx.fillStyle = game.timeLeft <= 10 ? '#ff5a76' : '#8fd3ff';
+  ctx.fill();
+  ctx.fillStyle = game.timeLeft <= 10 ? '#ff5a76' : '#fff';
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillText(`⏱ ${Math.ceil(game.timeLeft)}s`, CONFIG.W / 2, 82);
+}
+
 function drawSlipBanner() {
   ctx.save();
-  ctx.globalAlpha = Math.min(1, slipBanner);
+  ctx.globalAlpha = Math.min(1, game.slipBanner);
   roundRect(30, 180, CONFIG.W - 60, 64, 12);
   ctx.fillStyle = 'rgba(60,30,70,0.92)'; ctx.fill();
   ctx.textAlign = 'center';
   ctx.fillStyle = '#ffd54a'; ctx.font = 'bold 15px sans-serif';
-  ctx.fillText('哎呀…娃娃滑掉了！', CONFIG.W / 2, 205);
+  ctx.fillText('哎呀…独角兽滑掉了！', CONFIG.W / 2, 205);
   ctx.fillStyle = '#c9a8d8'; ctx.font = '11px sans-serif';
-  ctx.fillText('（此处为激励视频点位：看广告可稳住爪子）', CONFIG.W / 2, 226);
+  ctx.fillText('（此处为激励视频点位：看广告可稳住钩子）', CONFIG.W / 2, 226);
   ctx.restore();
 }
 
-/** 出货结算面板（稀有度光晕+NEW 标记） */
-function drawPrizePanel(p) {
-  const pop = Math.min(1, p.t * 4);          // 弹出动画
-  const ease = 1 - Math.pow(1 - pop, 3);
+function drawTutor() {
   ctx.save();
-  ctx.fillStyle = `rgba(20,10,30,${0.55 * ease})`;
+  ctx.globalAlpha = Math.min(1, game.tutorT);
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('看准时机，点击屏幕放钩！', CONFIG.W / 2, 160);
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.fillText('凑齐 3 只同款团子自动消除，槽满即败', CONFIG.W / 2, 182);
+  ctx.restore();
+}
+
+/* --------------------------------- 界面 ---------------------------------- */
+const BTN = {
+  start:  { x: CONFIG.W / 2 - 90, y: 430, w: 180, h: 54, label: '开始游戏' },
+  levelsBack: { x: CONFIG.W / 2 - 70, y: 560, w: 140, h: 44, label: '返回' },
+  next:   { x: CONFIG.W / 2 - 90, y: 400, w: 180, h: 50, label: '下一关 ▶' },
+  retry:  { x: CONFIG.W / 2 - 90, y: 462, w: 180, h: 44, label: '重玩本关' },
+  winMenu:{ x: CONFIG.W / 2 - 90, y: 516, w: 180, h: 40, label: '选关' },
+  revive: { x: CONFIG.W / 2 - 90, y: 386, w: 180, h: 50, label: '📺 看广告复活（演示）' },
+  failRetry: { x: CONFIG.W / 2 - 90, y: 448, w: 180, h: 44, label: '重新开始' },
+  failMenu:  { x: CONFIG.W / 2 - 90, y: 502, w: 180, h: 40, label: '选关' },
+};
+
+function drawButton(b, primary = true) {
+  roundRect(b.x, b.y, b.w, b.h, b.h / 2.6);
+  ctx.fillStyle = primary ? '#ff6fa5' : 'rgba(255,255,255,0.16)';
+  ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${primary ? 17 : 14}px sans-serif`;
+  ctx.fillText(b.label, b.x + b.w / 2, b.y + b.h / 2 + (primary ? 6 : 5));
+}
+
+function drawMenu() {
+  ctx.textAlign = 'center';
+  // 标题团子装饰
+  ctx.save();
+  ctx.translate(CONFIG.W / 2, 190);
+  const demo = { type: ITEMS.cat, typeId: 'cat', r: 46, rot: 0, blink: 1.5, state: 'pond' };
+  drawDollBody(demo);
+  ctx.restore();
+  ctx.fillStyle = '#ffe3f0';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.fillText('团子捞捞乐', CONFIG.W / 2, 290);
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = '#c9a8d8';
+  ctx.fillText('黄金矿工 × 槽位三消 · 玩法原型 v2', CONFIG.W / 2, 318);
+  ctx.fillText('摆动的钩子捞起团子，凑齐 3 只同款消除', CONFIG.W / 2, 344);
+  drawButton(BTN.start);
+  ctx.font = '10px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillText('数值未调 · 仅供手感验证', CONFIG.W / 2, CONFIG.H - 20);
+}
+
+function drawLevelSelect() {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe3f0';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText('选 关', CONFIG.W / 2, 90);
+  const stars = store.stars;
+  for (let i = 0; i < LEVELS.length; i++) {
+    const col = i % 4, row = Math.floor(i / 4);
+    const cx = 62 + col * 84, cy = 180 + row * 130;
+    const unlocked = i < store.unlock;
+    ctx.beginPath(); ctx.arc(cx, cy, 32, 0, 7);
+    ctx.fillStyle = unlocked ? '#ff6fa5' : 'rgba(255,255,255,0.12)';
+    ctx.fill();
+    ctx.fillStyle = unlocked ? '#fff' : 'rgba(255,255,255,0.35)';
+    ctx.font = 'bold 20px sans-serif';
+    ctx.fillText(unlocked ? String(i + 1) : '🔒', cx, cy + 7);
+    // 星级
+    const s = stars[i] || 0;
+    ctx.font = '12px sans-serif';
+    ctx.fillStyle = '#ffd54a';
+    ctx.fillText('★'.repeat(s) + '☆'.repeat(Math.max(0, 3 - s)), cx, cy + 52);
+  }
+  drawButton(BTN.levelsBack, false);
+}
+
+function drawWinPanel() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(20,10,30,0.6)';
   ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
-  const cx = CONFIG.W / 2, cy = CONFIG.H / 2 - 30;
-  ctx.translate(cx, cy); ctx.scale(ease, ease);
-
-  // 稀有度光晕
-  const glow = RARITY_STYLE[p.doll.type.rarity].glow;
-  const gg = ctx.createRadialGradient(0, -20, 10, 0, -20, 130);
-  gg.addColorStop(0, glow + 'cc'); gg.addColorStop(1, glow + '00');
-  ctx.fillStyle = gg;
-  ctx.beginPath(); ctx.arc(0, -20, 130, 0, 7); ctx.fill();
-
-  // 卡片
-  roundRect(-110, -140, 220, 280, 20);
+  roundRect(40, 130, CONFIG.W - 80, 460 - 130 + 130, 20);
   ctx.fillStyle = '#fff8fc'; ctx.fill();
   ctx.textAlign = 'center';
-  ctx.fillStyle = glow; ctx.font = 'bold 14px sans-serif';
-  ctx.fillText(`✦ ${RARITY_STYLE[p.doll.type.rarity].label} ✦`, 0, -112);
-  ctx.fillStyle = '#5a4668'; ctx.font = 'bold 20px sans-serif';
-  ctx.fillText(p.doll.type.name, 0, 105);
-  ctx.fillStyle = '#9c8aa8'; ctx.font = '12px sans-serif';
-  ctx.fillText('点击任意处继续', 0, 128);
-
-  // 展示娃娃（放大绘制：临时替换坐标系）
-  ctx.translate(0, -10);
-  const scale = 2.2;
-  ctx.scale(scale, scale);
-  const temp = new Doll(p.doll.type, 0, 0, p.doll.r);
-  temp.blink = 1; // 展示时不眨眼
-  drawDoll(temp);
+  ctx.fillStyle = '#ff6fa5';
+  ctx.font = 'bold 26px sans-serif';
+  ctx.fillText('过关啦！🎉', CONFIG.W / 2, 180);
+  // 星级
+  ctx.font = '34px sans-serif';
+  ctx.fillStyle = '#ffd54a';
+  ctx.fillText('★'.repeat(game.winStars) + '☆'.repeat(3 - game.winStars), CONFIG.W / 2, 232);
+  ctx.font = '15px sans-serif';
+  ctx.fillStyle = '#5a4668';
+  ctx.fillText(`得分 ${game.winScore}（含时间奖励）`, CONFIG.W / 2, 268);
+  ctx.font = '11px sans-serif';
+  ctx.fillStyle = '#9c8aa8';
+  ctx.fillText('（正式版此处展示全国通过率，驱动攀比裂变）', CONFIG.W / 2, 292);
+  const isLast = game.levelIdx + 1 >= LEVELS.length;
+  drawButton({ ...BTN.next, label: isLast ? '已通关 · 重玩' : '下一关 ▶' });
+  drawButton(BTN.retry, false);
+  drawButton(BTN.winMenu, false);
   ctx.restore();
 }
 
-/** 圆角矩形工具 */
+function drawFailPanel() {
+  ctx.save();
+  ctx.fillStyle = 'rgba(20,10,30,0.6)';
+  ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+  roundRect(40, 130, CONFIG.W - 80, 560 - 130, 20);
+  ctx.fillStyle = '#fff8fc'; ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#5a4668';
+  ctx.font = 'bold 24px sans-serif';
+  ctx.fillText(game.failReason === 'full' ? '槽位满了！😵' : '时间到！⏰', CONFIG.W / 2, 180);
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = '#9c8aa8';
+  ctx.fillText(game.failReason === 'full'
+    ? '7 个槽位被占满且无法消除'
+    : '差一点就达标了', CONFIG.W / 2, 210);
+  ctx.font = '11px sans-serif';
+  ctx.fillText('（复活按钮 = 激励视频点位，正式版接平台广告）', CONFIG.W / 2, 360);
+  if (!game.reviveUsed) drawButton(BTN.revive);
+  drawButton(BTN.failRetry, false);
+  drawButton(BTN.failMenu, false);
+  ctx.restore();
+}
+
 function roundRect(x, y, w, h, r) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -653,6 +1096,67 @@ function roundRect(x, y, w, h, r) {
   ctx.closePath();
 }
 
+/* --------------------------------- 输入 ---------------------------------- */
+function onTap(cx, cy) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (cx - rect.left) / rect.width * CONFIG.W;
+  const y = (cy - rect.top) / rect.height * CONFIG.H;
+  ac.resume();
+
+  switch (game.scene) {
+    case 'menu':
+      if (hitRect(x, y, BTN.start)) { game.scene = 'levels'; SFX.deposit(); }
+      break;
+    case 'levels': {
+      for (let i = 0; i < LEVELS.length; i++) {
+        const col = i % 4, row = Math.floor(i / 4);
+        const lx = 62 + col * 84, ly = 180 + row * 130;
+        if (dist2(x, y, lx, ly) < 32 ** 2 && i < store.unlock) {
+          startLevel(i); SFX.deposit(); return;
+        }
+      }
+      if (hitRect(x, y, BTN.levelsBack)) game.scene = 'menu';
+      break;
+    }
+    case 'play':
+      if (claw.state === 'SWING') { claw.state = 'DROP'; SFX.drop(); }
+      break;
+    case 'win': {
+      const isLast = game.levelIdx + 1 >= LEVELS.length;
+      if (hitRect(x, y, BTN.next)) startLevel(isLast ? game.levelIdx : game.levelIdx + 1);
+      else if (hitRect(x, y, BTN.retry)) startLevel(game.levelIdx);
+      else if (hitRect(x, y, BTN.winMenu)) game.scene = 'levels';
+      break;
+    }
+    case 'fail':
+      if (!game.reviveUsed && hitRect(x, y, BTN.revive)) {
+        // 演示版复活：清空槽位 + 续 10 秒（正式版：看完激励视频触发）
+        game.reviveUsed = true;
+        game.tray.forEach((it, i) => {
+          if (it) { burst(slotX(i), CONFIG.trayY, it.type.body || '#fff', 8); it.state = 'gone'; }
+          game.tray[i] = null;
+        });
+        game.timeLeft += 10;
+        game.combo = 0;
+        game.scene = 'play';
+        SFX.win();
+      }
+      else if (hitRect(x, y, BTN.failRetry)) startLevel(game.levelIdx);
+      else if (hitRect(x, y, BTN.failMenu)) game.scene = 'levels';
+      break;
+  }
+}
+canvas.addEventListener('pointerdown', e => onTap(e.clientX, e.clientY));
+
+/* -------------------------------- 主循环 --------------------------------- */
+let lastT = performance.now();
+function loop(now) {
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
 requestAnimationFrame(loop);
 </script>
 </body>

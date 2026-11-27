@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>心动娃娃机 · 玩法原型</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; background: #1a1225; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }
+  /* 游戏画布保持竖屏比例居中 */
+  #game { touch-action: none; user-select: none; -webkit-user-select: none;
+    box-shadow: 0 0 60px rgba(255,150,200,.25); border-radius: 8px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+'use strict';
+/* ============================================================================
+ * 心动娃娃机 —— 核心玩法原型（黄金矿工魔改）
+ * 目的：验证「摆动→下落→夹取→滑落/出货」的核心手感，零美术零依赖
+ * 所有可调皮的手感数值集中在 CONFIG 区，改数值即可调手感
+ * ==========================================================================*/
+
+/* ------------------------------- 手感调参区 ------------------------------- */
+const CONFIG = {
+  W: 375, H: 667,            // 逻辑分辨率（竖屏手机比例）
+  clawSwingAmplitude: 118,   // 爪子左右摆动幅度（px）
+  clawSwingSpeed: 1.6,       // 摆动角速度（越大摆动越快，时机越难）
+  clawDropSpeed: 430,        // 爪子下落速度 px/s（越快越爽快，越慢越紧张）
+  clawRiseSpeed: 300,        // 爪子上升速度（带娃娃时慢=紧张感）
+  clawGripPower: 1.0,        // 爪子力度全局倍率（商业点位：强力爪道具）
+  closeAnimTime: 0.32,       // 爪臂闭合动画时长（s）
+  gripThreshold: 0.35,       // 抓取判定阈值：低于它=夹不起来
+  weightPenalty: 0.30,       // 娃娃重量对抓取的惩罚系数
+  slipperyPenalty: 0.22,     // 娃娃圆滑度对抓取的惩罚系数
+  slipBase: 0.85,            // 上升途中滑落概率基数（滑落=最强紧张点/广告点位）
+  railY: 118,                // 滑轨高度
+  groundY: 548,              // 娃娃堆地面高度
+  exitX: 52,                 // 出货口中心 x
+  clawHomeY: 150,            // 爪子待机高度（缆绳收起）
+};
+
+/* ------------------------------- 娃娃图鉴数据 ----------------------------- */
+/* rarity: common 60% / rare 30% / legend 10%（通过重量+圆滑度自然控制出货率） */
+const DOLL_TYPES = [
+  { name: '奶猫团子', body: '#FFF3E4', ear: 'cat',    rarity: 'common', weight: 0.9,  slippery: 0.25 },
+  { name: '灰灰兔',   body: '#CFCBE0', ear: 'rabbit', rarity: 'common', weight: 0.9,  slippery: 0.30 },
+  { name: '云朵熊',   body: '#DCEEFF', ear: 'bear',   rarity: 'common', weight: 1.0,  slippery: 0.28 },
+  { name: '草莓兔',   body: '#FFB7C9', ear: 'rabbit', rarity: 'rare',   weight: 1.15, slippery: 0.45 },
+  { name: '柴犬元宝', body: '#F7B24A', ear: 'shiba',  rarity: 'rare',   weight: 1.25, slippery: 0.42 },
+  { name: '彩虹独角兽', body: '#E8D5FF', ear: 'unicorn', rarity: 'legend', weight: 1.55, slippery: 0.68 },
+];
+const RARITY_STYLE = {
+  common: { label: '普通', glow: '#b0bec5', star: false },
+  rare:   { label: '稀有', glow: '#ff8fb2', star: true  },
+  legend: { label: '传说', glow: '#ffd54a', star: true  },
+};
+
+/* -------------------------------- 基础 setup ------------------------------ */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let SCALE = 1;
+
+/** 画布自适应：逻辑分辨率固定，按窗口等比缩放居中 */
+function resize() {
+  const scale = Math.min(innerWidth / CONFIG.W, innerHeight / CONFIG.H);
+  canvas.width = CONFIG.W * scale * devicePixelRatio;
+  canvas.height = CONFIG.H * scale * devicePixelRatio;
+  canvas.style.width = CONFIG.W * scale + 'px';
+  canvas.style.height = CONFIG.H * scale + 'px';
+  SCALE = scale * devicePixelRatio;
+}
+addEventListener('resize', resize);
+resize();
+
+/* ------------------------------ 音效合成器 -------------------------------- */
+/* 用 WebAudio 振荡器实时合成，零音频文件 */
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+const ac = new AudioCtx();
+
+/** 播放单个音符 */
+function tone(freq, dur, type = 'sine', vol = 0.18, when = 0) {
+  const o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, ac.currentTime + when);
+  g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + when + dur);
+  o.connect(g).connect(ac.destination);
+  o.start(ac.currentTime + when); o.stop(ac.currentTime + when + dur);
+}
+const SFX = {
+  drop:    () => tone(500, 0.35, 'sine', 0.10),                       // 下落滑音
+  clamp:   () => { tone(220, 0.08, 'square', 0.15); tone(160, 0.1, 'square', 0.12, 0.06); }, // 闭合咔哒
+  grab:    () => { tone(523, 0.12, 'sine', 0.16); tone(659, 0.15, 'sine', 0.16, 0.09); },    // 夹中上扬
+  slip:    () => { tone(380, 0.18, 'sawtooth', 0.10); tone(240, 0.25, 'sawtooth', 0.09, 0.12); }, // 滑落失落
+  miss:    () => tone(180, 0.2, 'triangle', 0.10),                    // 空夹
+  prize:   () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.16, 'sine', 0.16, i * 0.09)),   // 出货琶音
+  legend:  () => [523, 659, 784, 1047, 1319, 1568].forEach((f, i) => tone(f, 0.2, 'triangle', 0.16, i * 0.1)), // 传说出货
+};
+
+/* --------------------------------- 娃娃 ----------------------------------- */
+class Doll {
+  constructor(type, x, y, r) {
+    this.type = type;
+    this.x = x; this.y = y; this.r = r;
+    this.vx = 0; this.vy = 0;        // 滑落/补货时的抛物线速度
+    this.state = 'idle';             // idle | grabbed | falling | exiting
+    this.rot = Math.random() * 0.6 - 0.3; // 随机倾斜增加堆叠自然感
+    this.blink = Math.random() * 3;  // 眨眼计时
+  }
+}
+
+/** 在娃娃堆里随机生成一个娃娃（类型按稀有度加权，位置随机堆叠） */
+function spawnDoll(fromSky = false) {
+  // 稀有度加权随机：传说款天然更少出现在机台里
+  const pool = DOLL_TYPES.flatMap(t =>
+    Array(t.rarity === 'common' ? 5 : t.rarity === 'rare' ? 3 : 1).fill(t));
+  const type = pool[Math.floor(Math.random() * pool.length)];
+  const r = 17 + Math.random() * 9 + (type.rarity === 'legend' ? 4 : 0);
+  const x = 95 + Math.random() * (CONFIG.W - 130);
+  const layer = Math.random();
+  const y = CONFIG.groundY - r - (layer > 0.55 ? r * 1.5 : 0); // 两层堆叠
+  const doll = new Doll(type, x, fromSky ? -r : y, r);
+  if (fromSky) { doll.state = 'falling'; doll.vy = 0; doll.targetY = y; }
+  return doll;
+}
+
+/* --------------------------------- 粒子 ----------------------------------- */
+class Particle {
+  constructor(x, y, color) {
+    this.x = x; this.y = y;
+    const a = Math.random() * Math.PI * 2, s = 60 + Math.random() * 180;
+    this.vx = Math.cos(a) * s; this.vy = Math.sin(a) * s - 120;
+    this.life = 0.7 + Math.random() * 0.6; this.maxLife = this.life;
+    this.color = color; this.size = 3 + Math.random() * 4;
+    this.spin = Math.random() * Math.PI;
+  }
+}
+
+/* ------------------------------ 爪子状态机 -------------------------------- */
+/* SWING 摆动待机 → DROP 下落 → CLOSE 闭合判定 → RISE 上升(可能滑落)
+   → TO_EXIT 平移到出货口 → RELEASE 松爪出货 → 回到 SWING */
+const claw = {
+  state: 'SWING',
+  swingT: 0,                 // 摆动相位
+  x: CONFIG.W / 2, y: CONFIG.clawHomeY,
+  openAngle: 1,              // 爪臂张开度 1=全开 0=闭合
+  closeT: 0,
+  grabbed: null,             // 被抓住的娃娃
+  slipAtY: null,             // 预设滑落高度（null=不滑落）
+  gripAccuracy: 0,           // 本次对准精度（调试用）
+};
+
+let dolls = [];
+let particles = [];
+let collected = new Set();   // 图鉴：已收集的娃娃名
+let totalCaught = 0;
+let screenShake = 0;         // 屏幕震动量
+let slipBanner = 0;          // 滑落提示横幅计时
+let prizePanel = null;       // 出货面板 { doll, t }
+
+// 初始机台铺货 10 个
+for (let i = 0; i < 10; i++) dolls.push(spawnDoll());
+
+/* ------------------------------ 输入：点击下落 ----------------------------- */
+function onTap(cx, cy) {
+  const rect = canvas.getBoundingClientRect();
+  const x = (cx - rect.left) / rect.width * CONFIG.W;
+  const y = (cy - rect.top) / rect.height * CONFIG.H;
+  if (prizePanel) { prizePanel = null; restock(); return; } // 关闭出货面板
+  if (claw.state !== 'SWING') return;
+  ac.resume();               // 浏览器要求用户交互后才能出声
+  claw.state = 'DROP';
+  SFX.drop();
+}
+canvas.addEventListener('pointerdown', e => onTap(e.clientX, e.clientY));
+
+/** 出货后补货：新娃娃从天而降落入堆中（补货本身也是视觉爽点） */
+function restock() {
+  while (dolls.filter(d => d.state !== 'exiting').length < 10)
+    dolls.push(spawnDoll(true));
+}
+
+/* ------------------------------ 抓取判定 ---------------------------------- */
+/** 核心判定：对准精度 × 爪力 − 重量惩罚 − 圆滑惩罚 > 阈值 → 抓起 */
+function tryGrab() {
+  const clawHalfWidth = 26;
+  // 找爪子正下方、水平距离最近且在范围内的娃娃
+  const candidates = dolls
+    .filter(d => d.state === 'idle')
+    .map(d => ({ d, dx: Math.abs(d.x - claw.x) }))
+    .filter(({ d, dx }) => dx < d.r + clawHalfWidth && d.y > claw.y)
+    .sort((a, b) => a.dx - b.dx);
+
+  if (!candidates.length) { SFX.miss(); return; } // 空夹
+
+  const { d, dx } = candidates[0];
+  const accuracy = Math.max(0, 1 - dx / (d.r + clawHalfWidth));
+  const grip = accuracy * CONFIG.clawGripPower
+             - CONFIG.weightPenalty * d.type.weight
+             - CONFIG.slipperyPenalty * d.type.slippery;
+  claw.gripAccuracy = accuracy;
+
+  if (grip > CONFIG.gripThreshold) {
+    // 抓起成功，判定上升途中是否滑落（圆滑+越偏越容易滑）
+    const slipChance = CONFIG.slipBase * d.type.slippery * (1 - accuracy)
+                     + 0.08 * d.type.weight;
+    claw.grabbed = d;
+    d.state = 'grabbed';
+    claw.slipAtY = Math.random() < slipChance
+      ? claw.y - (60 + Math.random() * 140)   // 在上升途中某高度滑落
+      : null;
+    SFX.grab();
+    screenShake = 6;
+  } else {
+    SFX.miss(); // 碰到了但夹不住——挫败感（数值可调）
+  }
+}
+
+/* -------------------------------- 主循环 ---------------------------------- */
+let lastT = performance.now();
+function loop(now) {
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+  update(dt);
+  render();
+  requestAnimationFrame(loop);
+}
+
+function update(dt) {
+  // --- 爪子状态机 ---
+  switch (claw.state) {
+    case 'SWING': {
+      claw.swingT += dt * CONFIG.clawSwingSpeed;
+      claw.x = CONFIG.W / 2 + Math.sin(claw.swingT) * CONFIG.clawSwingAmplitude;
+      claw.y = CONFIG.clawHomeY;
+      claw.openAngle = Math.min(1, claw.openAngle + dt * 3);
+      break;
+    }
+    case 'DROP': {
+      claw.y += CONFIG.clawDropSpeed * dt;
+      // 碰到娃娃堆顶或地面就触发闭合
+      const hitDoll = dolls.some(d => d.state === 'idle'
+        && Math.abs(d.x - claw.x) < d.r + 26 && claw.y + 22 > d.y - d.r);
+      if (hitDoll || claw.y + 22 >= CONFIG.groundY) {
+        claw.state = 'CLOSE'; claw.closeT = 0;
+        SFX.clamp();
+      }
+      break;
+    }
+    case 'CLOSE': {
+      claw.closeT += dt;
+      claw.openAngle = Math.max(0, 1 - claw.closeT / CONFIG.closeAnimTime);
+      if (claw.closeT >= CONFIG.closeAnimTime) {
+        tryGrab();
+        claw.state = 'RISE';
+      }
+      break;
+    }
+    case 'RISE': {
+      const speed = claw.grabbed ? CONFIG.clawRiseSpeed : CONFIG.clawRiseSpeed * 1.6;
+      claw.y -= speed * dt;
+      // 娃娃跟随爪子
+      if (claw.grabbed) {
+        claw.grabbed.x = claw.x;
+        claw.grabbed.y = claw.y + 34 + claw.grabbed.r * 0.4;
+        // 到达预设滑落点 → 脱落抛物线坠回
+        if (claw.slipAtY !== null && claw.y <= claw.slipAtY) {
+          const d = claw.grabbed;
+          d.state = 'falling';
+          d.vx = (Math.random() - 0.5) * 120; d.vy = -40;
+          claw.grabbed = null; claw.slipAtY = null;
+          claw.openAngle = 0.5;
+          SFX.slip();
+          slipBanner = 1.6;   // ★ 商业点位标记：此处未来弹出「看广告稳住爪子」
+        }
+      }
+      if (claw.y <= CONFIG.clawHomeY) {
+        claw.y = CONFIG.clawHomeY;
+        claw.state = claw.grabbed ? 'TO_EXIT' : 'SWING';
+        claw.swingT = Math.asin(Math.max(-1, Math.min(1,
+          (claw.x - CONFIG.W / 2) / CONFIG.clawSwingAmplitude)));
+      }
+      break;
+    }
+    case 'TO_EXIT': {
+      const dx = CONFIG.exitX - claw.x;
+      const step = 220 * dt;
+      claw.x += Math.abs(dx) < step ? dx : Math.sign(dx) * step;
+      claw.grabbed.x = claw.x;
+      claw.grabbed.y = claw.y + 34 + claw.grabbed.r * 0.4;
+      if (Math.abs(dx) < 1) { claw.state = 'RELEASE'; claw.openAngle = 1; }
+      break;
+    }
+    case 'RELEASE': {
+      const d = claw.grabbed;
+      claw.grabbed = null;
+      d.state = 'exiting'; d.vy = 60; d.vx = 0;
+      break;
+    }
+  }
+
+  // --- 娃娃抛物线（滑落/补货/出货入洞） ---
+  dolls.forEach(d => {
+    if (d.state === 'falling') {
+      d.vy += 900 * dt;
+      d.x += d.vx * dt; d.y += d.vy * dt;
+      const floor = d.targetY ?? CONFIG.groundY - d.r;
+      if (d.y >= floor) { d.y = floor; d.state = 'idle'; d.vx = d.vy = 0;
+        burst(d.x, d.y, '#ffffff', 5); }
+    } else if (d.state === 'exiting') {
+      d.vy += 700 * dt; d.y += d.vy * dt;
+      if (d.y > CONFIG.groundY + 40) {
+        // 掉入出货口 → 弹出货面板
+        d.state = 'gone';
+        dolls = dolls.filter(x => x !== d);
+        totalCaught++;
+        collected.add(d.type.name);
+        prizePanel = { doll: d, t: 0 };
+        const isLegend = d.type.rarity === 'legend';
+        isLegend ? SFX.legend() : SFX.prize();
+        burst(CONFIG.exitX, CONFIG.groundY - 20, RARITY_STYLE[d.type.rarity].glow, 30);
+        burst(CONFIG.exitX, CONFIG.groundY - 20, '#ff6fa5', 20);
+        screenShake = 8;
+      }
+    }
+    d.blink += dt;
+  });
+
+  // --- 粒子 ---
+  particles.forEach(p => {
+    p.vy += 500 * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+    p.life -= dt; p.spin += dt * 6;
+  });
+  particles = particles.filter(p => p.life > 0);
+
+  screenShake = Math.max(0, screenShake - dt * 30);
+  slipBanner = Math.max(0, slipBanner - dt);
+  if (prizePanel) prizePanel.t += dt;
+}
+
+/** 生成一发粒子 */
+function burst(x, y, color, n) {
+  for (let i = 0; i < n; i++) particles.push(new Particle(x, y, color));
+}
+
+/* --------------------------------- 绘制 ----------------------------------- */
+function render() {
+  ctx.save();
+  ctx.scale(SCALE, SCALE);
+  // 屏幕震动
+  if (screenShake > 0)
+    ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+
+  drawBackground();
+  drawMachine();
+  // 娃娃（先画下层后画上层）
+  [...dolls].sort((a, b) => a.y - b.y).forEach(drawDoll);
+  drawClaw();
+  drawGlass();      // 玻璃罩盖在娃娃和爪子上，反光质感
+  particles.forEach(drawParticle);
+  drawHUD();
+  if (slipBanner > 0) drawSlipBanner();
+  if (prizePanel) drawPrizePanel(prizePanel);
+  ctx.restore();
+}
+
+function drawBackground() {
+  const g = ctx.createLinearGradient(0, 0, 0, CONFIG.H);
+  g.addColorStop(0, '#2a1e3f'); g.addColorStop(1, '#4a2c5a');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+}
+
+/** 机台外壳+滑轨+出货口 */
+function drawMachine() {
+  // 外壳
+  roundRect(10, 88, CONFIG.W - 20, CONFIG.groundY + 60, 18);
+  const mg = ctx.createLinearGradient(0, 88, 0, CONFIG.groundY + 60);
+  mg.addColorStop(0, '#ff9ec4'); mg.addColorStop(1, '#e86ba0');
+  ctx.fillStyle = mg; ctx.fill();
+  // 内腔（玻璃后面的空间）
+  roundRect(22, CONFIG.railY - 12, CONFIG.W - 44, CONFIG.groundY - CONFIG.railY + 52, 12);
+  ctx.fillStyle = '#fdf0f6'; ctx.fill();
+  // 滑轨
+  roundRect(30, CONFIG.railY - 8, CONFIG.W - 60, 12, 6);
+  ctx.fillStyle = '#8e6fa8'; ctx.fill();
+  // 跑马灯（顶部交替闪烁）
+  const t = performance.now() / 300;
+  for (let i = 0; i < 9; i++) {
+    const x = 30 + i * (CONFIG.W - 60) / 8;
+    ctx.beginPath(); ctx.arc(x, 97, 5, 0, 7);
+    ctx.fillStyle = (i + Math.floor(t)) % 2 ? '#ffd54a' : '#ff6fa5';
+    ctx.fill();
+  }
+  // 出货口（左下拱形黑洞）
+  ctx.beginPath();
+  ctx.arc(CONFIG.exitX, CONFIG.groundY + 28, 30, Math.PI, 0);
+  ctx.lineTo(CONFIG.exitX + 30, CONFIG.groundY + 46);
+  ctx.lineTo(CONFIG.exitX - 30, CONFIG.groundY + 46);
+  ctx.closePath();
+  ctx.fillStyle = '#3a2340'; ctx.fill();
+  ctx.fillStyle = '#ffd54a';
+  ctx.font = 'bold 11px sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText('出 货 口', CONFIG.exitX, CONFIG.groundY + 58);
+}
+
+/** 玻璃罩：半透明+斜向高光（画在最上层模拟真实机台） */
+function drawGlass() {
+  ctx.save();
+  roundRect(22, CONFIG.railY - 12, CONFIG.W - 44, CONFIG.groundY - CONFIG.railY + 40, 12);
+  ctx.fillStyle = 'rgba(200,230,255,0.10)'; ctx.fill();
+  ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.save();
+  ctx.translate(0, 0); ctx.rotate(-0.35);
+  ctx.fillRect(40, -80, 60, 800);
+  ctx.fillRect(150, -80, 22, 800);
+  ctx.restore();
+  ctx.restore();
+}
+
+/** 绘制单个娃娃（程序化卡通脸，耳朵形状区分物种） */
+function drawDoll(d) {
+  if (d.state === 'gone') return;
+  ctx.save();
+  ctx.translate(d.x, d.y);
+  ctx.rotate(d.state === 'grabbed' ? Math.sin(performance.now() / 200) * 0.08 : d.rot);
+  const r = d.r, body = d.type.body;
+
+  // 耳朵
+  ctx.fillStyle = body;
+  const ear = d.type.ear;
+  if (ear === 'cat' || ear === 'shiba') {
+    // 三角耳
+    [[-1, 0], [1, 0]].forEach(([s]) => {
+      ctx.beginPath();
+      ctx.moveTo(s * r * 0.72, -r * 0.35);
+      ctx.lineTo(s * r * 0.42, -r * 1.15);
+      ctx.lineTo(s * r * 0.12, -r * 0.55);
+      ctx.closePath(); ctx.fill();
+    });
+    if (ear === 'shiba') { // 柴犬褐色耳尖
+      ctx.fillStyle = '#c77f2e';
+      [[-1], [1]].forEach(([s]) => {
+        ctx.beginPath();
+        ctx.moveTo(s * r * 0.55, -r * 0.72);
+        ctx.lineTo(s * r * 0.42, -r * 1.15);
+        ctx.lineTo(s * r * 0.30, -r * 0.72);
+        ctx.closePath(); ctx.fill();
+      });
+    }
+  } else if (ear === 'rabbit') {
+    // 长椭圆兔耳
+    [[-1], [1]].forEach(([s]) => {
+      ctx.save();
+      ctx.translate(s * r * 0.38, -r * 0.9);
+      ctx.rotate(s * 0.18);
+      ctx.beginPath(); ctx.ellipse(0, 0, r * 0.22, r * 0.62, 0, 0, 7);
+      ctx.fillStyle = body; ctx.fill();
+      ctx.beginPath(); ctx.ellipse(0, r * 0.05, r * 0.11, r * 0.4, 0, 0, 7);
+      ctx.fillStyle = 'rgba(255,140,170,0.55)'; ctx.fill();
+      ctx.restore();
+    });
+  } else if (ear === 'bear') {
+    [[-1], [1]].forEach(([s]) => {
+      ctx.beginPath(); ctx.arc(s * r * 0.55, -r * 0.62, r * 0.3, 0, 7);
+      ctx.fillStyle = body; ctx.fill();
+    });
+  } else if (ear === 'unicorn') {
+    // 金色独角
+    ctx.beginPath();
+    ctx.moveTo(0, -r * 0.6); ctx.lineTo(-r * 0.16, -r * 1.05); ctx.lineTo(r * 0.16, -r * 1.05);
+    ctx.closePath(); ctx.fillStyle = body; ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-r * 0.12, -r * 0.95); ctx.lineTo(0, -r * 1.55); ctx.lineTo(r * 0.12, -r * 0.95);
+    ctx.closePath(); ctx.fillStyle = '#ffd54a'; ctx.fill();
+  }
+
+  // 身体（带底部暗部增加立体感）
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, 7);
+  ctx.fillStyle = body; ctx.fill();
+  ctx.beginPath(); ctx.arc(0, r * 0.25, r * 0.85, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.fillStyle = 'rgba(0,0,0,0.07)'; ctx.fill();
+
+  // 眼睛（眨眼：每 3 秒闭合 0.12 秒）
+  const blinking = (d.blink % 3) < 0.12;
+  [[-1], [1]].forEach(([s]) => {
+    const ex = s * r * 0.34, ey = -r * 0.05;
+    if (blinking) {
+      ctx.beginPath(); ctx.moveTo(ex - r * 0.12, ey); ctx.lineTo(ex + r * 0.12, ey);
+      ctx.strokeStyle = '#4a3a4a'; ctx.lineWidth = 1.6; ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.arc(ex, ey, r * 0.13, 0, 7);
+      ctx.fillStyle = '#3a2f3f'; ctx.fill();
+      ctx.beginPath(); ctx.arc(ex + r * 0.04, ey - r * 0.04, r * 0.045, 0, 7);
+      ctx.fillStyle = '#fff'; ctx.fill();
+    }
+  });
+  // 腮红
+  [[-1], [1]].forEach(([s]) => {
+    ctx.beginPath(); ctx.arc(s * r * 0.58, r * 0.22, r * 0.15, 0, 7);
+    ctx.fillStyle = 'rgba(255,120,150,0.45)'; ctx.fill();
+  });
+  // ω 嘴
+  ctx.beginPath();
+  ctx.arc(-r * 0.09, r * 0.16, r * 0.09, 0.1 * Math.PI, 0.95 * Math.PI);
+  ctx.arc(r * 0.09, r * 0.16, r * 0.09, 0.05 * Math.PI, 0.9 * Math.PI);
+  ctx.strokeStyle = '#4a3a4a'; ctx.lineWidth = 1.4; ctx.stroke();
+
+  // 稀有款星星闪光
+  if (RARITY_STYLE[d.type.rarity].star) {
+    const tw = performance.now() / 400;
+    ctx.fillStyle = RARITY_STYLE[d.type.rarity].glow;
+    [[-r * 0.9, -r * 0.6], [r * 0.95, -r * 0.2]].forEach(([sx, sy], i) => {
+      const a = 0.4 + 0.6 * Math.abs(Math.sin(tw + i * 1.7));
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy - 4); ctx.lineTo(sx + 2, sy); ctx.lineTo(sx, sy + 4);
+      ctx.lineTo(sx - 2, sy); ctx.closePath(); ctx.fill();
+      ctx.globalAlpha = 1;
+    });
+  }
+  ctx.restore();
+}
+
+/** 爪子：滑块+缆绳+三爪头（侧视简化为两臂钳） */
+function drawClaw() {
+  const open = claw.openAngle;
+  // 滑块
+  roundRect(claw.x - 16, CONFIG.railY - 10, 32, 16, 5);
+  ctx.fillStyle = '#7c5f99'; ctx.fill();
+  // 缆绳
+  ctx.beginPath(); ctx.moveTo(claw.x, CONFIG.railY); ctx.lineTo(claw.x, claw.y + 4);
+  ctx.strokeStyle = '#d8cfe8'; ctx.lineWidth = 2.5; ctx.stroke();
+  // 爪头中心
+  ctx.save();
+  ctx.translate(claw.x, claw.y + 8);
+  ctx.beginPath(); ctx.arc(0, 0, 9, 0, 7);
+  const hg = ctx.createLinearGradient(-9, -9, 9, 9);
+  hg.addColorStop(0, '#e8e8f5'); hg.addColorStop(1, '#8f8fb0');
+  ctx.fillStyle = hg; ctx.fill();
+  // 两臂（张开度 open: 1 全开 → 0 闭合）
+  const spread = 0.25 + open * 0.75;   // 臂展开角度（弧度）
+  [[-1], [1]].forEach(([s]) => {
+    ctx.save();
+    ctx.rotate(s * spread);
+    // 臂杆
+    ctx.beginPath();
+    ctx.moveTo(0, 2);
+    ctx.quadraticCurveTo(s * 10, 14, s * 6, 26);   // 向内弯曲的爪指
+    ctx.lineWidth = 5.5; ctx.lineCap = 'round';
+    ctx.strokeStyle = '#b8b8d8'; ctx.stroke();
+    ctx.restore();
+  });
+  ctx.restore();
+}
+
+function drawParticle(p) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, p.life / p.maxLife);
+  ctx.translate(p.x, p.y); ctx.rotate(p.spin);
+  ctx.fillStyle = p.color;
+  ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+  ctx.restore();
+}
+
+/** 顶部 HUD：标题+图鉴进度+抓到计数 */
+function drawHUD() {
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffe3f0';
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillText('心 动 娃 娃 机', CONFIG.W / 2, 40);
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = '#c9a8d8';
+  ctx.fillText(`图鉴 ${collected.size}/${DOLL_TYPES.length} · 已抓到 ${totalCaught} 只`,
+    CONFIG.W / 2, 62);
+  // 底部操作提示
+  ctx.fillStyle = 'rgba(255,255,255,0.75)';
+  ctx.font = '13px sans-serif';
+  const hint = claw.state === 'SWING'
+    ? '👇 点击屏幕任意处，放下爪子！'
+    : '';
+  ctx.fillText(hint, CONFIG.W / 2, CONFIG.H - 30);
+  ctx.font = '10px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillText('玩法原型 · 数值未调 · 仅验证手感', CONFIG.W / 2, CONFIG.H - 12);
+}
+
+/** 滑落提示横幅（★ 标记未来激励视频点位） */
+function drawSlipBanner() {
+  ctx.save();
+  ctx.globalAlpha = Math.min(1, slipBanner);
+  roundRect(30, 180, CONFIG.W - 60, 64, 12);
+  ctx.fillStyle = 'rgba(60,30,70,0.92)'; ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffd54a'; ctx.font = 'bold 15px sans-serif';
+  ctx.fillText('哎呀…娃娃滑掉了！', CONFIG.W / 2, 205);
+  ctx.fillStyle = '#c9a8d8'; ctx.font = '11px sans-serif';
+  ctx.fillText('（此处为激励视频点位：看广告可稳住爪子）', CONFIG.W / 2, 226);
+  ctx.restore();
+}
+
+/** 出货结算面板（稀有度光晕+NEW 标记） */
+function drawPrizePanel(p) {
+  const pop = Math.min(1, p.t * 4);          // 弹出动画
+  const ease = 1 - Math.pow(1 - pop, 3);
+  ctx.save();
+  ctx.fillStyle = `rgba(20,10,30,${0.55 * ease})`;
+  ctx.fillRect(0, 0, CONFIG.W, CONFIG.H);
+  const cx = CONFIG.W / 2, cy = CONFIG.H / 2 - 30;
+  ctx.translate(cx, cy); ctx.scale(ease, ease);
+
+  // 稀有度光晕
+  const glow = RARITY_STYLE[p.doll.type.rarity].glow;
+  const gg = ctx.createRadialGradient(0, -20, 10, 0, -20, 130);
+  gg.addColorStop(0, glow + 'cc'); gg.addColorStop(1, glow + '00');
+  ctx.fillStyle = gg;
+  ctx.beginPath(); ctx.arc(0, -20, 130, 0, 7); ctx.fill();
+
+  // 卡片
+  roundRect(-110, -140, 220, 280, 20);
+  ctx.fillStyle = '#fff8fc'; ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.fillStyle = glow; ctx.font = 'bold 14px sans-serif';
+  ctx.fillText(`✦ ${RARITY_STYLE[p.doll.type.rarity].label} ✦`, 0, -112);
+  ctx.fillStyle = '#5a4668'; ctx.font = 'bold 20px sans-serif';
+  ctx.fillText(p.doll.type.name, 0, 105);
+  ctx.fillStyle = '#9c8aa8'; ctx.font = '12px sans-serif';
+  ctx.fillText('点击任意处继续', 0, 128);
+
+  // 展示娃娃（放大绘制：临时替换坐标系）
+  ctx.translate(0, -10);
+  const scale = 2.2;
+  ctx.scale(scale, scale);
+  const temp = new Doll(p.doll.type, 0, 0, p.doll.r);
+  temp.blink = 1; // 展示时不眨眼
+  drawDoll(temp);
+  ctx.restore();
+}
+
+/** 圆角矩形工具 */
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

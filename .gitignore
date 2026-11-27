@@ -1,0 +1,8 @@
+# 本地工具文件
+claw-machine-demo/qrcode.png
+claw-machine-demo/_check.js
+claw-machine-demo/_extract.py
+
+# 系统文件
+Thumbs.db
+.DS_Store
