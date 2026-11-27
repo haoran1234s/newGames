@@ -63,7 +63,7 @@
 - **选定方向**：奶油手账风（暖白纸 + 细棕描边 + 粉彩团子）
 - **参考**：
   - [Sumikko Gurashi 设计语言](https://designbycurio.com/learn/sumikko-gurashi-san-x-2012)：暖白底、细棕描边、粉彩填充，强调色只给可操作元素
-  - [Suika Game 设计分析](https://www.kokutech.com/blog/gamedev/design-patterns/unique-mechanics/suika-game)：一屏信息、表情随局势变化、落点虚线辅助瞄准、零阻力重开
+  - [Suika Game 设计分析](https://www.kokutech.com/blog/gamedev/design-patterns/unique-mechanics/suika-game)：一屏信息、表情随局势变化、零阻力重开
   - [Royal Match 拆解](https://www.deconstructoroffun.com/blog/2021/3/21/royal-match-the-new-king-from-turkey)：元素形状和颜色差异大，动画短，不让玩家等
   - [Juice It or Lose It](https://gdad.wiki/wiki/sources/source-juice-it-or-lose-it) / [Art of Screenshake](https://gamedesign.gg/watch/art-of-screenshake/)：挤压拉伸、命中闪白、顿帧
 
@@ -92,7 +92,7 @@
 ## 4. 手感（Juice）清单
 | 时刻 | 反馈 |
 |---|---|
-| 瞄准 | 虚线落点辅助线（Suika 同款） |
+| 瞄准 | 不提供落点辅助线（刻意保留时机判断难度） |
 | 下钩 | 钩尖拖尾、入水涟漪 + 水声 |
 | 钩中 | 顿帧 60ms + 目标闪白 + 挤压回弹 + 短震 15ms |
 | 入槽 | 飞行途中缩小到槽位尺寸，落入后槽位与团子回弹 |

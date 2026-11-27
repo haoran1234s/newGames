@@ -854,7 +854,6 @@ function render() {
   else {
     drawPond();
     drawRail();
-    if (claw.state === 'SWING' && game.scene === 'play') drawGuide();
     drawTrail();
     [...game.items].sort((a, b) => a.y - b.y).forEach(drawItem);
     drawClaw();
@@ -936,17 +935,6 @@ function drawRail() {
     ctx.beginPath(); ctx.arc(x, CONFIG.railY - 1, 2.2, 0, 7);
     ctx.fillStyle = PAL.line; ctx.fill();
   });
-}
-/** 落点辅助虚线（Suika 同款：让玩家永远不怪操作） */
-function drawGuide() {
-  ctx.save();
-  ctx.setLineDash([4, 7]);
-  ctx.lineDashOffset = -game.pondT * 20;
-  ctx.beginPath();
-  ctx.moveTo(claw.x, claw.y + CONFIG.hookLen + 10);
-  ctx.lineTo(claw.x, CONFIG.pond.y1);
-  ctx.strokeStyle = 'rgba(90,61,49,0.28)'; ctx.lineWidth = 2; ctx.stroke();
-  ctx.restore();
 }
 function drawTrail() {
   game.trail.forEach(p => {
