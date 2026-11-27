@@ -47,7 +47,8 @@ const SCENES = [
   const page = await openPage(URL);
   try {
     // 等引擎启动、素材加载完成
-    for (let i = 0; i < 60; i++) {
+    // 线上首次加载可能较慢（国内访问 GitHub Pages），最多等 60 秒
+    for (let i = 0; i < 240; i++) {
       if (await page.evaluate('!!globalThis.__game')) break;
       await sleep(250);
     }

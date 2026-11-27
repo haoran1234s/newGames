@@ -13,7 +13,8 @@ const VW = 390, VH = 844;
   let fails = 0;
   const check = (ok, msg) => { console.log(`${ok ? '✓' : '✗'} ${msg}`); if (!ok) fails++; };
   try {
-    for (let i = 0; i < 60 && !(await p.evaluate('!!globalThis.__game')); i++) await sleep(250);
+    // 线上首次加载可能较慢（国内访问 GitHub Pages），最多等 60 秒
+    for (let i = 0; i < 240 && !(await p.evaluate('!!globalThis.__game')); i++) await sleep(250);
     await p.evaluate('localStorage.clear(); __game.goMenu()');
     // SHOW_ALL：375×667 等比缩放到视口宽度，垂直居中
     const k = VW / 375, top = (VH - 667 * k) / 2;
